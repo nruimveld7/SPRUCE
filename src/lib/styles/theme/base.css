@@ -38,6 +38,8 @@ body.scrollbar-dragging * {
 
 body.scrollbar-dragging .teamSetupScrollRail,
 body.scrollbar-dragging .teamSetupScrollThumb,
+body.scrollbar-dragging .teamSetupHScrollRail,
+body.scrollbar-dragging .teamSetupHScrollThumb,
 body.scrollbar-dragging .appScrollRail,
 body.scrollbar-dragging .appScrollThumb,
 body.scrollbar-dragging .gridScrollRail,

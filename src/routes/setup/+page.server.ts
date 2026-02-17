@@ -3,6 +3,7 @@ import type { Actions, PageServerLoad } from './$types';
 import { GetPool } from '$lib/server/db';
 import { getAccessState } from '$lib/server/access';
 import { setActiveScheduleForSession } from '$lib/server/auth';
+import { getDefaultScheduleThemeJson } from '$lib/server/schedule-theme';
 
 export const load: PageServerLoad = async ({ locals }) => {
 	const user = locals.user;
@@ -35,17 +36,27 @@ export const actions: Actions = {
 
 		const pool = await GetPool();
 		const requestDb = pool.request();
+		requestDb.input('themeJson', getDefaultScheduleThemeJson());
 		requestDb.input('name', name);
 		requestDb.input('userOid', user.id);
 
 		const result = await requestDb.query(`
+			DECLARE @CreatedSchedule TABLE (ScheduleId int NOT NULL);
 			DECLARE @ScheduleId int;
 			DECLARE @ManagerRoleId int;
 
-			INSERT INTO dbo.Schedules (Name, Description, CreatedBy)
-			VALUES (@name, NULL, @userOid);
+			INSERT INTO dbo.Schedules (Name, Description, ThemeJson, CreatedBy)
+			OUTPUT INSERTED.ScheduleId INTO @CreatedSchedule(ScheduleId)
+			VALUES (@name, NULL, @themeJson, @userOid);
 
-			SET @ScheduleId = SCOPE_IDENTITY();
+			SELECT TOP (1) @ScheduleId = ScheduleId
+			FROM @CreatedSchedule;
+
+			IF @ScheduleId IS NULL
+			BEGIN
+				RAISERROR ('Failed to capture ScheduleId for new schedule.', 16, 1);
+				RETURN;
+			END
 
 			SELECT TOP (1) @ManagerRoleId = RoleId FROM dbo.Roles WHERE RoleName = 'Manager';
 

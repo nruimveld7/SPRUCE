@@ -61,14 +61,20 @@ function scopeRank(scopeType: EventScopeType): number {
 	return 1;
 }
 
+function matchesUserScope(eventRow: ScheduleEvent, context: CellContext): boolean {
+	if (!context.userOid || !eventRow.userOid) return false;
+	const matchesUser = context.userOid.trim().toLowerCase() === eventRow.userOid.trim().toLowerCase();
+	if (!matchesUser) return false;
+	return eventRow.employeeTypeId === context.employeeTypeId;
+}
+
 function appliesToCell(eventRow: ScheduleEvent, context: CellContext): boolean {
 	if (eventRow.scopeType !== context.scopeType) return false;
 	if (context.scopeType === 'global') return true;
 	if (context.scopeType === 'shift') {
 		return context.employeeTypeId !== null && eventRow.employeeTypeId === context.employeeTypeId;
 	}
-	if (!context.userOid || !eventRow.userOid) return false;
-	return context.userOid.trim().toLowerCase() === eventRow.userOid.trim().toLowerCase();
+	return matchesUserScope(eventRow, context);
 }
 
 function appliesToCellForOverlay(eventRow: ScheduleEvent, context: CellContext): boolean {
@@ -76,8 +82,7 @@ function appliesToCellForOverlay(eventRow: ScheduleEvent, context: CellContext):
 	if (eventRow.scopeType === 'shift') {
 		return context.employeeTypeId !== null && eventRow.employeeTypeId === context.employeeTypeId;
 	}
-	if (!context.userOid || !eventRow.userOid) return false;
-	return context.userOid.trim().toLowerCase() === eventRow.userOid.trim().toLowerCase();
+	return matchesUserScope(eventRow, context);
 }
 
 function appliesToDay(eventRow: ScheduleEvent, dayIso: string): boolean {
@@ -101,6 +106,45 @@ function resolveModeBackground(
 	return buildLinearGradient(rgbaColors);
 }
 
+function resolveBackgroundFromEvents(events: ScheduleEvent[], opacity: number | null): string | null {
+	if (events.length === 0) return null;
+	const colors = events
+		.slice()
+		.sort((left, right) => left.eventId - right.eventId)
+		.map((eventRow) => normalizeHexColor(eventRow.eventCodeColor));
+	if (opacity === null) return buildLinearGradient(colors);
+	const rgbaColors = colors.map((color) => toRgba(color, opacity));
+	return buildLinearGradient(rgbaColors);
+}
+
+function resolveUserBadgeBackground(
+	dayApplicable: ScheduleEvent[],
+	context: CellContext
+): string | null {
+	const userBadgeColors = dayApplicable
+		.filter(
+			(eventRow) =>
+				eventRow.eventDisplayMode === 'Badge Indicator' && matchesUserScope(eventRow, context)
+		)
+		.sort((left, right) => left.eventId - right.eventId)
+		.map((eventRow) => normalizeHexColor(eventRow.eventCodeColor));
+	const shiftBadgeColors = dayApplicable
+		.filter(
+			(eventRow) =>
+				eventRow.eventDisplayMode === 'Badge Indicator' && matchesShiftScope(eventRow, context)
+		)
+		.sort((left, right) => left.eventId - right.eventId)
+		.map((eventRow) => normalizeHexColor(eventRow.eventCodeColor));
+	const combinedColors = [...userBadgeColors, ...shiftBadgeColors];
+	if (combinedColors.length === 0) return null;
+	return buildLinearGradient(combinedColors);
+}
+
+function matchesShiftScope(eventRow: ScheduleEvent, context: CellContext): boolean {
+	if (context.employeeTypeId === null) return false;
+	return eventRow.scopeType === 'shift' && eventRow.employeeTypeId === context.employeeTypeId;
+}
+
 export function resolveCellEventVisuals(
 	events: ScheduleEvent[],
 	dayIso: string,
@@ -115,21 +159,35 @@ export function resolveCellEventVisuals(
 		};
 	}
 
+	const cellScoped = dayApplicable.filter((eventRow) => appliesToCell(eventRow, context));
+	const overlayScoped = dayApplicable.filter((eventRow) => appliesToCellForOverlay(eventRow, context));
+	const userShiftOverrideScoped =
+		context.scopeType === 'user'
+			? dayApplicable.filter(
+					(eventRow) =>
+						eventRow.eventDisplayMode === 'Shift Override' &&
+						(matchesUserScope(eventRow, context) || matchesShiftScope(eventRow, context))
+				)
+			: [];
 	return {
-		overrideBackground: resolveModeBackground(
-			dayApplicable.filter((eventRow) => appliesToCell(eventRow, context)),
-			'Shift Override',
-			null
-		),
-		overlayBackground: resolveModeBackground(
-			dayApplicable.filter((eventRow) => appliesToCellForOverlay(eventRow, context)),
-			'Schedule Overlay',
-			0.33
-		),
-		badgeBackground: resolveModeBackground(
-			dayApplicable.filter((eventRow) => appliesToCell(eventRow, context)),
-			'Badge Indicator',
-			null
-		)
+		overrideBackground:
+			context.scopeType === 'user'
+				? resolveBackgroundFromEvents(userShiftOverrideScoped, null)
+				: resolveModeBackground(cellScoped, 'Shift Override', null),
+		overlayBackground: resolveModeBackground(overlayScoped, 'Schedule Overlay', 0.33),
+		badgeBackground:
+			context.scopeType === 'user'
+				? resolveUserBadgeBackground(dayApplicable, context)
+				: resolveModeBackground(cellScoped, 'Badge Indicator', null)
 	};
+}
+
+export function hasHoverEventsForCell(
+	events: ScheduleEvent[],
+	dayIso: string,
+	context: CellContext
+): boolean {
+	return events.some(
+		(eventRow) => appliesToDay(eventRow, dayIso) && appliesToCellForOverlay(eventRow, context)
+	);
 }

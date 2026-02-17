@@ -1,9 +1,10 @@
 <script lang="ts">
 	import { base } from '$app/paths';
 	import { goto } from '$app/navigation';
-	import { onDestroy } from 'svelte';
+	import { onDestroy, onMount, tick } from 'svelte';
 	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
 	import ColorPicker from '$lib/components/ColorPicker.svelte';
+	import { fetchWithAuthRedirect as fetchWithAuthRedirectUtil } from '$lib/utils/fetchWithAuthRedirect';
 
 	type ScheduleRole = 'Member' | 'Maintainer' | 'Manager';
 	type ScheduleMembership = {
@@ -36,10 +37,24 @@
 		isActive: boolean;
 		themes: Record<ThemeMode, ThemeDraft>;
 	};
+	type ScheduleStateMutationResponse = {
+		ok?: boolean;
+		scheduleId?: number;
+		isActive?: boolean;
+		mode?: 'schedule_state_updated' | 'manager_removed' | 'schedule_deleted';
+	};
+	type ScheduleStateConflictResponse = {
+		code?: string;
+		action?: 'REMOVE_SELF' | 'DELETE_SCHEDULE';
+		managerCount?: number;
+		message?: string;
+	};
 
 	export let open = false;
 	export let activeScheduleId: number | null = null;
 	export let scheduleMemberships: ScheduleMembership[] = [];
+	export let currentThemeMode: ThemeMode = 'dark';
+	export let onThemeModeChange: (nextMode: ThemeMode) => void | Promise<void> = () => {};
 	export let onClose: () => void = () => {};
 	let liveMemberships: ScheduleMembership[] = [];
 	let membershipsLoading = false;
@@ -71,6 +86,15 @@
 	let lastManagerSelectionId: number | null = null;
 	let selectedThemeMode: ThemeMode = 'dark';
 	let selectedThemeSection: ThemeSection = 'page';
+	let modalScrollEl: HTMLDivElement | null = null;
+	let railEl: HTMLDivElement | null = null;
+	let showCustomScrollbar = false;
+	let thumbHeightPx = 0;
+	let thumbTopPx = 0;
+	let isDraggingScrollbar = false;
+	let dragStartY = 0;
+	let dragStartThumbTopPx = 0;
+	let modalScrollSyncKey = '';
 
 	const themeFieldOptions: ThemeFieldOption[] = [
 		{ key: 'background', label: 'Background', section: 'page' },
@@ -138,6 +162,7 @@
 		'accent-2',
 		'accent-3',
 		'today',
+		'today-header-bg',
 		'focus-ring',
 		'interactive-bg',
 		'interactive-bg-hover',
@@ -339,7 +364,7 @@
 		const textAlpha = isDark ? 0.92 : 0.86;
 		const mutedAlpha = isDark ? 0.72 : 0.6;
 		const faintAlpha = isDark ? 0.56 : 0.45;
-		const todayAlpha = isDark ? 0.24 : 0.20;
+		const todayAlpha = isDark ? 0.24 : 0.2;
 		const interactiveHoverAlpha = isDark ? 0.5 : 0.45;
 		const cellActiveAlpha = isDark ? 0.18 : 0.16;
 		const panelAlpha = isDark ? 0.04 : 0.68;
@@ -367,6 +392,7 @@
 			[`--theme-${mode}-accent-2`]: rgba(accent, 0.3),
 			[`--theme-${mode}-accent-3`]: rgba(accent, 0.15),
 			[`--theme-${mode}-today`]: rgba(todayColor, todayAlpha),
+			[`--theme-${mode}-today-header-bg`]: rgba(todayColor, 0.33),
 			[`--theme-${mode}-focus-ring`]: `0 0 0 3px ${rgba(accent, 0.22)}`,
 			[`--theme-${mode}-interactive-bg`]: isDark ? rgba('#ffffff', 0.06) : rgba('#ffffff', 0.72),
 			[`--theme-${mode}-interactive-bg-hover`]: isDark
@@ -395,15 +421,12 @@
 			[`--theme-${mode}-border-accent-medium`]: rgba(border, 0.42),
 			[`--theme-${mode}-border-accent-strong`]: rgba(border, 0.55),
 			[`--theme-${mode}-border-accent-focus`]: rgba(border, 0.72),
-			[`--theme-${mode}-table-weekday-bg`]: rgba(weekdayColor, isDark ? 0.18 : 0.82),
-			[`--theme-${mode}-table-weekend-bg`]: rgba(weekendColor, isDark ? 0.5 : 0.22),
-			[`--theme-${mode}-table-border-color`]: rgba(scheduleBorderColor, isDark ? 0.86 : 0.7),
-			[`--theme-${mode}-table-header-gradient-start`]: rgba(weekdayColor, isDark ? 0.72 : 0.84),
-			[`--theme-${mode}-table-header-gradient-end`]: rgba(
-				headerGradientBottom,
-				isDark ? 0.9 : 0.92
-			),
-			[`--theme-${mode}-table-team-cell-bg`]: rgba(teamCellColor, isDark ? 0.92 : 0.94),
+			[`--theme-${mode}-table-weekday-bg`]: rgba(weekdayColor, 1),
+			[`--theme-${mode}-table-weekend-bg`]: rgba(weekendColor, 1),
+			[`--theme-${mode}-table-border-color`]: rgba(scheduleBorderColor, 1),
+			[`--theme-${mode}-table-header-gradient-start`]: rgba(weekdayColor, 1),
+			[`--theme-${mode}-table-header-gradient-end`]: rgba(headerGradientBottom, 1),
+			[`--theme-${mode}-table-team-cell-bg`]: rgba(teamCellColor, 1),
 			[`--theme-${mode}-gradient-header-start`]: headerGradientFrom,
 			[`--theme-${mode}-gradient-header-end`]: headerGradientTo,
 			[`--theme-${mode}-gradient-modal-start`]: modalGradientFrom,
@@ -588,27 +611,11 @@
 		return text;
 	}
 
-	function isAuthRedirectResponse(response: Response): boolean {
-		if (response.type === 'opaqueredirect') return true;
-		if (response.status === 302 || response.status === 401 || response.status === 403) return true;
-		return response.redirected && response.url.includes('/auth/login');
-	}
-
-	function redirectToLogin() {
-		if (typeof window === 'undefined') return;
-		window.location.assign(`${base}/auth/login`);
-	}
-
 	async function fetchWithAuthRedirect(
 		input: RequestInfo | URL,
 		init: RequestInit
 	): Promise<Response | null> {
-		const result = await fetch(input, { ...init, redirect: 'manual' });
-		if (isAuthRedirectResponse(result)) {
-			redirectToLogin();
-			return null;
-		}
-		return result;
+		return fetchWithAuthRedirectUtil(input, init, base);
 	}
 
 	async function toggleManagerScheduleActive() {
@@ -623,18 +630,57 @@
 		const nextIsActive = !selectedManagerDraft.isActive;
 
 		try {
-			const response = await fetchWithAuthRedirect(`${base}/api/schedules/state`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json', accept: 'application/json' },
-				body: JSON.stringify({ scheduleId, isActive: nextIsActive })
-			});
+			const sendStateChange = async (confirmDeactivation: boolean): Promise<Response | null> =>
+				fetchWithAuthRedirect(`${base}/api/schedules/state`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json', accept: 'application/json' },
+					body: JSON.stringify({
+						scheduleId,
+						isActive: nextIsActive,
+						confirmDeactivation
+					})
+				});
+
+			let response = await sendStateChange(false);
 			if (!response) return;
+
+			if (!response.ok && !nextIsActive && response.status === 409) {
+				let conflict: ScheduleStateConflictResponse | null = null;
+				try {
+					conflict = (await response.json()) as ScheduleStateConflictResponse;
+				} catch {
+					conflict = null;
+				}
+
+				if (conflict?.code === 'SCHEDULE_DEACTIVATION_CONFIRMATION_REQUIRED') {
+					const promptMessage =
+						typeof conflict.message === 'string' && conflict.message.trim()
+							? conflict.message
+							: conflict.action === 'DELETE_SCHEDULE'
+								? 'You are the last Manager for this schedule. If you continue, the schedule and all related data will be permanently deleted. Continue?'
+								: 'This user is currently assigned to active shifts. If you continue, active assignments will end effective today and future assignments will be removed. Continue?';
+					if (!window.confirm(promptMessage)) {
+						return;
+					}
+					response = await sendStateChange(true);
+					if (!response) return;
+				}
+			}
+
 			if (!response.ok) {
 				const message = await parseErrorMessage(
 					response,
 					`Failed to update schedule state (${response.status})`
 				);
 				throw new Error(message);
+			}
+
+			const payload = (await response.json()) as ScheduleStateMutationResponse;
+			if (payload.mode === 'manager_removed' || payload.mode === 'schedule_deleted') {
+				syncSelectionToCurrentOnRefresh = true;
+				await refreshMemberships();
+				await goto(`${base}/`, { invalidateAll: true });
+				return;
 			}
 
 			updateManagerDraft(scheduleId, {
@@ -678,7 +724,7 @@
 	function handleManagerCancel() {
 		if (!selectedMembership || selectedMembership.RoleName !== 'Manager' || !selectedManagerSaved)
 			return;
-		selectedThemeMode = 'dark';
+		selectedThemeMode = currentThemeMode;
 		selectedThemeSection = 'page';
 		updateManagerDraft(selectedMembership.ScheduleId, selectedManagerSaved);
 		applyThemeState(selectedManagerSaved);
@@ -686,7 +732,9 @@
 	}
 
 	function toggleSelectedThemeMode() {
-		selectedThemeMode = selectedThemeMode === 'dark' ? 'light' : 'dark';
+		const nextMode: ThemeMode = selectedThemeMode === 'dark' ? 'light' : 'dark';
+		selectedThemeMode = nextMode;
+		void onThemeModeChange(nextMode);
 	}
 
 	async function handleManagerSave() {
@@ -754,6 +802,108 @@
 		return role === 'Manager' ? ' (Manager)' : role === 'Maintainer' ? ' (Maintainer)' : '';
 	}
 
+	function clamp(value: number, min: number, max: number): number {
+		return Math.min(max, Math.max(min, value));
+	}
+
+	function updateCustomScrollbar() {
+		if (!modalScrollEl) return;
+
+		const scrollHeight = modalScrollEl.scrollHeight;
+		const clientHeight = modalScrollEl.clientHeight;
+		const scrollTop = modalScrollEl.scrollTop;
+		const hasOverflow = scrollHeight > clientHeight + 1;
+
+		showCustomScrollbar = hasOverflow;
+		if (!hasOverflow) {
+			thumbHeightPx = 0;
+			thumbTopPx = 0;
+			return;
+		}
+
+		const railHeight = railEl?.clientHeight ?? Math.max(clientHeight - 24, 0);
+		if (railHeight <= 0) return;
+
+		const minThumbHeight = 36;
+		const nextThumbHeight = Math.max(minThumbHeight, (railHeight * clientHeight) / scrollHeight);
+		const maxThumbTop = Math.max(railHeight - nextThumbHeight, 0);
+		const maxScrollTop = Math.max(scrollHeight - clientHeight, 1);
+		const nextThumbTop = (scrollTop / maxScrollTop) * maxThumbTop;
+
+		thumbHeightPx = nextThumbHeight;
+		thumbTopPx = clamp(nextThumbTop, 0, maxThumbTop);
+	}
+
+	function onModalScroll() {
+		if (!isDraggingScrollbar) {
+			updateCustomScrollbar();
+		}
+	}
+
+	function onDragMove(event: MouseEvent) {
+		if (!isDraggingScrollbar || !modalScrollEl || !railEl) return;
+
+		const railHeight = railEl.clientHeight;
+		const maxThumbTop = Math.max(railHeight - thumbHeightPx, 0);
+		const nextThumbTop = clamp(dragStartThumbTopPx + (event.clientY - dragStartY), 0, maxThumbTop);
+		const maxScrollTop = Math.max(modalScrollEl.scrollHeight - modalScrollEl.clientHeight, 0);
+
+		thumbTopPx = nextThumbTop;
+		modalScrollEl.scrollTop = maxThumbTop > 0 ? (nextThumbTop / maxThumbTop) * maxScrollTop : 0;
+	}
+
+	function setGlobalScrollbarDragging(active: boolean) {
+		if (typeof document === 'undefined') return;
+		const body = document.body;
+		const current = Number(body.dataset.scrollbarDragCount ?? '0');
+		const next = Math.max(0, current + (active ? 1 : -1));
+		if (next === 0) {
+			delete body.dataset.scrollbarDragCount;
+		} else {
+			body.dataset.scrollbarDragCount = String(next);
+		}
+		body.classList.toggle('scrollbar-dragging', next > 0);
+	}
+
+	function stopDragging() {
+		if (isDraggingScrollbar) {
+			setGlobalScrollbarDragging(false);
+		}
+		isDraggingScrollbar = false;
+		if (typeof window !== 'undefined') {
+			window.removeEventListener('mousemove', onDragMove);
+			window.removeEventListener('mouseup', stopDragging);
+		}
+	}
+
+	function startThumbDrag(event: MouseEvent) {
+		if (!showCustomScrollbar) return;
+		event.preventDefault();
+		event.stopPropagation();
+		isDraggingScrollbar = true;
+		setGlobalScrollbarDragging(true);
+		dragStartY = event.clientY;
+		dragStartThumbTopPx = thumbTopPx;
+		window.addEventListener('mousemove', onDragMove);
+		window.addEventListener('mouseup', stopDragging);
+	}
+
+	function handleRailClick(event: MouseEvent) {
+		if (!modalScrollEl || !railEl || !showCustomScrollbar) return;
+		if (event.target !== railEl) return;
+
+		const rect = railEl.getBoundingClientRect();
+		const desiredTop = clamp(
+			event.clientY - rect.top - thumbHeightPx / 2,
+			0,
+			Math.max(rect.height - thumbHeightPx, 0)
+		);
+		const maxThumbTop = Math.max(rect.height - thumbHeightPx, 1);
+		const maxScrollTop = Math.max(modalScrollEl.scrollHeight - modalScrollEl.clientHeight, 0);
+		modalScrollEl.scrollTop = (desiredTop / maxThumbTop) * maxScrollTop;
+		updateCustomScrollbar();
+	}
+
 	function handleSelectSchedule(scheduleId: number) {
 		selectedScheduleId = scheduleId;
 		showCreateScheduleForm = false;
@@ -762,10 +912,17 @@
 
 	function openCreateScheduleForm() {
 		if (isCreatingSchedule) return;
+		selectedScheduleId = null;
 		showCreateScheduleForm = true;
 		newScheduleName = '';
 		actionError = '';
 		managerStatusMessage = '';
+		if (typeof document !== 'undefined') {
+			const activeEl = document.activeElement;
+			if (activeEl instanceof HTMLElement) {
+				activeEl.blur();
+			}
+		}
 	}
 
 	async function handleCreateSchedule() {
@@ -800,6 +957,7 @@
 				showCreateScheduleForm = false;
 				newScheduleName = '';
 			}
+			await goto(`${base}/`, { invalidateAll: true });
 		} catch (errorValue) {
 			actionError = errorValue instanceof Error ? errorValue.message : 'Failed to create schedule';
 		} finally {
@@ -815,7 +973,9 @@
 			const response = await fetchWithAuthRedirect(`${base}/api/schedules/memberships`, {
 				headers: { accept: 'application/json' }
 			});
-			if (!response) return;
+			if (!response) {
+				throw new Error('Session expired or access changed. Sign in again and retry.');
+			}
 
 			if (!response.ok) {
 				const message = await parseErrorMessage(
@@ -918,7 +1078,11 @@
 		document.body.classList.toggle('team-modal-open', open);
 	}
 
-	$: effectiveMemberships = hasLiveMemberships ? liveMemberships : scheduleMemberships;
+	$: effectiveMemberships = hasLiveMemberships
+		? liveMemberships
+		: open && membershipsLoading
+			? []
+			: scheduleMemberships;
 
 	$: resolvedCurrentScheduleId =
 		currentScheduleId ??
@@ -993,7 +1157,7 @@
 				: null;
 		if (currentManagerSelectionId !== lastManagerSelectionId) {
 			managerStatusMessage = '';
-			selectedThemeMode = 'dark';
+			selectedThemeMode = currentThemeMode;
 			selectedThemeSection = 'page';
 			lastManagerSelectionId = currentManagerSelectionId;
 		}
@@ -1001,14 +1165,22 @@
 
 	$: if (open && !wasOpen) {
 		hasLiveMemberships = false;
-		liveMemberships = scheduleMemberships;
+		liveMemberships = [];
 		currentScheduleId = normalizeScheduleId(activeScheduleId);
-		selectedScheduleId = normalizeScheduleId(activeScheduleId);
+		selectedScheduleId = null;
+		selectedThemeMode = currentThemeMode;
+		selectedThemeSection = 'page';
+		lastManagerSelectionId = null;
 		showCreateScheduleForm = false;
 		newScheduleName = '';
 		syncSelectionToCurrentOnRefresh = true;
 		actionError = '';
+		membershipsError = '';
 		void refreshMemberships();
+	}
+
+	$: if (open && selectedThemeMode !== currentThemeMode) {
+		selectedThemeMode = currentThemeMode;
 	}
 
 	$: if (open && selectedMembership) {
@@ -1040,13 +1212,48 @@
 
 	$: if (!open) {
 		syncSelectionToCurrentOnRefresh = false;
+		stopDragging();
 		applyActiveScheduleThemeOrDefault();
 	}
 
+	$: modalScrollSyncKey = open
+		? [
+				effectiveMemberships.length,
+				selectedScheduleId ?? '',
+				showCreateScheduleForm ? '1' : '0',
+				selectedThemeMode,
+				selectedThemeSection,
+				actionError,
+				membershipsLoading ? '1' : '0',
+				membershipsError
+			].join('|')
+		: '';
+
+	$: if (open && modalScrollSyncKey) {
+		tick().then(() => {
+			updateCustomScrollbar();
+			requestAnimationFrame(updateCustomScrollbar);
+		});
+	}
+
 	onDestroy(() => {
+		stopDragging();
 		if (typeof document !== 'undefined') {
 			document.body.classList.remove('team-modal-open');
+			if (!document.body.dataset.scrollbarDragCount) {
+				document.body.classList.remove('scrollbar-dragging');
+			}
 		}
+	});
+
+	onMount(() => {
+		const onResize = () => {
+			updateCustomScrollbar();
+		};
+		window.addEventListener('resize', onResize);
+		return () => {
+			window.removeEventListener('resize', onResize);
+		};
 	});
 </script>
 
@@ -1060,7 +1267,7 @@
 			aria-modal="true"
 			aria-labelledby="schedule-setup-title"
 		>
-			<div class="teamSetupModalScroll">
+			<div class="teamSetupModalScroll" bind:this={modalScrollEl} on:scroll={onModalScroll}>
 				<header class="teamSetupHeader">
 					<div>
 						<h2 id="schedule-setup-title">Schedules</h2>
@@ -1297,6 +1504,23 @@
 					</div>
 				</div>
 			</div>
+			{#if showCustomScrollbar}
+				<div
+					class="teamSetupScrollRail"
+					role="presentation"
+					aria-hidden="true"
+					bind:this={railEl}
+					on:mousedown={handleRailClick}
+				>
+					<div
+						class="teamSetupScrollThumb"
+						class:dragging={isDraggingScrollbar}
+						role="presentation"
+						style={`height:${thumbHeightPx}px;transform:translateY(${thumbTopPx}px);`}
+						on:mousedown={startThumbDrag}
+					></div>
+				</div>
+			{/if}
 		</div>
 	</div>
 {/if}

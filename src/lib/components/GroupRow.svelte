@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { MonthDay } from '$lib/utils/date';
-	import type { ScheduleEvent } from '$lib/data/demoData';
-	import { resolveCellEventVisuals } from '$lib/utils/scheduleEvents';
+	import type { ScheduleEvent } from '$lib/types/schedule';
+	import { hasHoverEventsForCell, resolveCellEventVisuals } from '$lib/utils/scheduleEvents';
 
 	export let groupName = '';
 	export let employeeTypeId: number | null = null;
@@ -17,9 +17,19 @@
 	export let isLastVisibleRow = false;
 	export let onSelectDay: (day: number) => void = () => {};
 	export let onDoubleClickDay: (day: MonthDay) => void = () => {};
+	export let onHoverDayCell: (
+		day: MonthDay,
+		cellEl: HTMLElement,
+		pointer: { clientX: number; clientY: number }
+	) => void = () => {};
+	export let onLeaveDayCell: () => void = () => {};
 	export let onToggle: () => void = () => {};
-	$: personLabel = employeeCount === 1 ? 'person' : 'people';
-	$: ariaLabel = `${groupName}. ${employeeCount} ${personLabel}. ${collapsed ? 'Collapsed' : 'Expanded'}.`;
+	const DOUBLE_TAP_WINDOW_MS = 320;
+	let lastTouchTapDay: number | null = null;
+	let lastTouchTapAtMs = 0;
+	let suppressClickDay: number | null = null;
+	$: memberLabel = employeeCount === 1 ? 'member' : 'members';
+	$: ariaLabel = `${groupName}. ${employeeCount} ${memberLabel}. ${collapsed ? 'Collapsed' : 'Expanded'}.`;
 	$: caret = collapsed ? '▸' : '▾';
 	function dayClass(day: MonthDay) {
 		return `cell shiftRowCell${day.isWeekend ? ' wknd' : ''}`;
@@ -41,11 +51,38 @@
 			})
 		] as const)
 	);
+	$: dayHasHoverEvents = new Map(
+		monthDays.map((day) => [
+			day.day,
+			hasHoverEventsForCell(events, dayIso(day.day), {
+				scopeType: 'shift',
+				employeeTypeId,
+				userOid: null
+			})
+		] as const)
+	);
 
 	function handleDayCellClick(day: number, event: MouseEvent) {
+		if (suppressClickDay === day) {
+			suppressClickDay = null;
+			return;
+		}
 		// Ignore the second click of a double-click sequence.
 		if (event.detail > 1) return;
 		onSelectDay(day);
+	}
+
+	function handleDayCellTouchEnd(day: MonthDay, event: TouchEvent) {
+		const now = Date.now();
+		const isDoubleTap = lastTouchTapDay === day.day && now - lastTouchTapAtMs <= DOUBLE_TAP_WINDOW_MS;
+		lastTouchTapDay = day.day;
+		lastTouchTapAtMs = now;
+		if (!isDoubleTap) return;
+		event.preventDefault();
+		suppressClickDay = day.day;
+		lastTouchTapDay = null;
+		lastTouchTapAtMs = 0;
+		onDoubleClickDay(day);
 	}
 </script>
 
@@ -70,15 +107,16 @@
 			<span>{groupName}</span>
 		</span>
 		{#if employeeCount == 1}
-			<span class="groupMeta">{employeeCount} person</span>
+			<span class="groupMeta">{employeeCount} member</span>
 		{:else}
-			<span class="groupMeta">{employeeCount} people</span>
+			<span class="groupMeta">{employeeCount} members</span>
 		{/if}
 	</div>
 </div>
 
 {#each monthDays as day}
 	{@const visuals = dayEventVisuals.get(day.day)}
+	{@const hasHoverEvents = dayHasHoverEvents.get(day.day) ?? false}
 	<div
 		class={dayClass(day)}
 		data-scope="shift-day"
@@ -89,12 +127,28 @@
 		aria-label={`Select ${groupName} on day ${day.day}`}
 		on:click={(event) => handleDayCellClick(day.day, event)}
 		on:dblclick={() => onDoubleClickDay(day)}
+		on:touchend={(event) => handleDayCellTouchEnd(day, event)}
 		on:keydown={(event) => {
 			if (event.key === 'Enter' || event.key === ' ') {
 				event.preventDefault();
 				onSelectDay(day.day);
 			}
 		}}
+		on:mouseenter={(event) => {
+			if (!hasHoverEvents) return;
+			onHoverDayCell(day, event.currentTarget as HTMLElement, {
+				clientX: event.clientX,
+				clientY: event.clientY
+			});
+		}}
+		on:mousemove={(event) => {
+			if (!hasHoverEvents) return;
+			onHoverDayCell(day, event.currentTarget as HTMLElement, {
+				clientX: event.clientX,
+				clientY: event.clientY
+			});
+		}}
+		on:mouseleave={onLeaveDayCell}
 	>
 		{#if visuals?.overrideBackground}
 			<div

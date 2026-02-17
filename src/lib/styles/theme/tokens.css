@@ -21,6 +21,7 @@
   --accent-2: var(--theme-dark-accent-2, rgba(200, 16, 46, .30));
   --accent-3: var(--theme-dark-accent-3, rgba(200, 16, 46, .15));
   --today: var(--theme-dark-today, rgba(200, 16, 46, .24));
+  --today-header-bg: var(--theme-dark-today-header-bg, rgba(200, 16, 46, 1));
   /* uniform today column */
   --focus-ring: var(--theme-dark-focus-ring, 0 0 0 3px rgba(200, 16, 46, .22));
 
@@ -46,12 +47,12 @@
   --border-accent-medium: var(--theme-dark-border-accent-medium, rgba(200, 16, 46, .42));
   --border-accent-strong: var(--theme-dark-border-accent-strong, rgba(200, 16, 46, .55));
   --border-accent-focus: var(--theme-dark-border-accent-focus, rgba(200, 16, 46, .72));
-  --table-weekday-bg: var(--theme-dark-table-weekday-bg, rgba(22, 26, 34, .18));
-  --table-weekend-bg: var(--theme-dark-table-weekend-bg, rgba(0, 0, 0, .50));
-  --table-border-color: var(--theme-dark-table-border-color, rgba(41, 42, 48, .86));
-  --table-header-gradient-start: var(--theme-dark-table-header-gradient-start, rgba(22, 26, 34, .72));
-  --table-header-gradient-end: var(--theme-dark-table-header-gradient-end, rgba(17, 20, 26, .90));
-  --table-team-cell-bg: var(--theme-dark-table-team-cell-bg, rgba(14, 16, 21, .92));
+  --table-weekday-bg: var(--theme-dark-table-weekday-bg, rgba(22, 26, 34, 1));
+  --table-weekend-bg: var(--theme-dark-table-weekend-bg, rgba(0, 0, 0, 1));
+  --table-border-color: var(--theme-dark-table-border-color, #292a30);
+  --table-header-gradient-start: var(--theme-dark-table-header-gradient-start, rgba(22, 26, 34, 1));
+  --table-header-gradient-end: var(--theme-dark-table-header-gradient-end, rgba(17, 20, 26, 1));
+  --table-team-cell-bg: var(--theme-dark-table-team-cell-bg, rgba(14, 16, 21, 1));
   --modal-surface: linear-gradient(180deg, var(--gradient-modal-start), var(--gradient-modal-end));
   --modal-border: var(--theme-dark-modal-border, rgba(200, 16, 46, .38));
   --panel-bg: var(--theme-dark-panel-bg, rgba(255, 255, 255, .04));
@@ -71,7 +72,7 @@
   --shadow: 0 18px 48px rgba(0, 0, 0, .60);
   --shadow-soft: 0 10px 26px rgba(0, 0, 0, .40);
 
-  --scrollbar-size: 4px;
+  --scrollbar-size: 6px;
   --scrollbar-radius: 999px;
   --scrollbar-track-bg: var(--theme-dark-scrollbar-track-bg, rgba(255, 255, 255, .04));
   --scrollbar-thumb-bg: var(--theme-dark-scrollbar-thumb-bg, rgba(200, 16, 46, .30));
@@ -111,6 +112,7 @@
   --oot: var(--theme-light-oot, #a78bfa);
   --work: var(--theme-light-work, #2dd4bf);
   --today: var(--theme-light-today, rgba(200, 16, 46, .20));
+  --today-header-bg: var(--theme-light-today-header-bg, rgba(200, 16, 46, 1));
   --focus-ring: var(--theme-light-focus-ring, 0 0 0 3px rgba(200, 16, 46, .22));
 
   --interactive-bg: var(--theme-light-interactive-bg, rgba(255, 255, 255, .72));
@@ -135,12 +137,12 @@
   --border-accent-medium: var(--theme-light-border-accent-medium, rgba(200, 16, 46, .34));
   --border-accent-strong: var(--theme-light-border-accent-strong, rgba(200, 16, 46, .45));
   --border-accent-focus: var(--theme-light-border-accent-focus, rgba(200, 16, 46, .62));
-  --table-weekday-bg: var(--theme-light-table-weekday-bg, rgba(245, 246, 248, .82));
-  --table-weekend-bg: var(--theme-light-table-weekend-bg, rgba(212, 215, 222, .22));
-  --table-border-color: var(--theme-light-table-border-color, rgba(187, 190, 198, .70));
-  --table-header-gradient-start: var(--theme-light-table-header-gradient-start, rgba(245, 246, 248, .84));
-  --table-header-gradient-end: var(--theme-light-table-header-gradient-end, rgba(216, 219, 225, .92));
-  --table-team-cell-bg: var(--theme-light-table-team-cell-bg, rgba(214, 218, 225, .94));
+  --table-weekday-bg: var(--theme-light-table-weekday-bg, rgba(245, 246, 248, 1));
+  --table-weekend-bg: var(--theme-light-table-weekend-bg, rgba(212, 215, 222, 1));
+  --table-border-color: var(--theme-light-table-border-color, #bbbec6);
+  --table-header-gradient-start: var(--theme-light-table-header-gradient-start, rgba(245, 246, 248, 1));
+  --table-header-gradient-end: var(--theme-light-table-header-gradient-end, rgba(216, 219, 225, 1));
+  --table-team-cell-bg: var(--theme-light-table-team-cell-bg, rgba(214, 218, 225, 1));
   --modal-surface: linear-gradient(180deg, var(--gradient-modal-start), var(--gradient-modal-end));
   --modal-border: var(--theme-light-modal-border, rgba(192, 132, 142, 1));
   --panel-bg: var(--theme-light-panel-bg, rgba(255, 255, 255, .68));

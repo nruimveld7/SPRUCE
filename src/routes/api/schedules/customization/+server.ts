@@ -1,6 +1,7 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { GetPool } from '$lib/server/db';
+import { DEFAULT_SCHEDULE_THEME } from '$lib/server/schedule-theme';
 
 type ThemeFieldKey =
 	| 'background'
@@ -36,36 +37,7 @@ const themeKeys: ThemeFieldKey[] = [
 	'secondaryGradient2'
 ];
 
-const themeDefaults: Record<'dark' | 'light', ThemeDraft> = {
-	dark: {
-		background: '#07080b',
-		text: '#ffffff',
-		accent: '#c8102e',
-		todayColor: '#c8102e',
-		weekendColor: '#000000',
-		weekdayColor: '#161a22',
-		pageBorderColor: '#292a30',
-		scheduleBorderColor: '#292a30',
-		primaryGradient1: '#7a1b2c',
-		primaryGradient2: '#2d1118',
-		secondaryGradient1: '#361219',
-		secondaryGradient2: '#0c0e12'
-	},
-	light: {
-		background: '#f2f3f5',
-		text: '#000000',
-		accent: '#c8102e',
-		todayColor: '#c8102e',
-		weekendColor: '#d4d7de',
-		weekdayColor: '#f5f6f8',
-		pageBorderColor: '#bbbec6',
-		scheduleBorderColor: '#bbbec6',
-		primaryGradient1: '#f4d7dd',
-		primaryGradient2: '#f8f9fb',
-		secondaryGradient1: '#faeef0',
-		secondaryGradient2: '#f5f6f8'
-	}
-};
+const themeDefaults: Record<'dark' | 'light', ThemeDraft> = DEFAULT_SCHEDULE_THEME;
 
 function parseScheduleId(value: unknown): number {
 	if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {

@@ -2,7 +2,9 @@
 	import { base } from '$app/paths';
 	import ColorPicker from '$lib/components/ColorPicker.svelte';
 	import DatePicker from '$lib/components/DatePicker.svelte';
+	import HorizontalScrollArea from '$lib/components/HorizontalScrollArea.svelte';
 	import Picker, { type PickerItem } from '$lib/components/Picker.svelte';
+	import { fetchWithAuthRedirect as fetchWithAuthRedirectUtil } from '$lib/utils/fetchWithAuthRedirect';
 	import { onDestroy, onMount, tick } from 'svelte';
 
 	type SetupSection = 'users' | 'shifts' | 'patterns' | 'eventCodes' | 'assignments';
@@ -24,8 +26,27 @@
 		pattern: string;
 		patternId: number | null;
 		startDate: string;
+		changes?: ShiftChangeRow[];
+	};
+	type ShiftChangeRow = {
+		startDate: string;
+		endDate?: string | null;
+		name: string;
+		patternId: number | null;
+		pattern: string;
 	};
 	type AssignmentRow = {
+		assignmentId: string;
+		sortOrder: number;
+		userOid: string;
+		shiftEmployeeTypeId: number;
+		startDate: string;
+		endDate?: string | null;
+		userName?: string;
+		shiftName?: string;
+		changes?: AssignmentChangeRow[];
+	};
+	type AssignmentChangeRow = {
 		assignmentId: string;
 		sortOrder: number;
 		userOid: string;
@@ -56,6 +77,11 @@
 		isActive: boolean;
 	};
 	type RemoveUserErrorPayload = {
+		code?: string;
+		message?: string;
+		activeAssignmentCount?: number;
+	};
+	type RemoveShiftErrorPayload = {
 		code?: string;
 		message?: string;
 		activeAssignmentCount?: number;
@@ -146,6 +172,7 @@
 	let teamShiftsLoading = false;
 	let teamShiftsError = '';
 	let assignmentRows: AssignmentRow[] = [];
+	let assignmentAllChanges: AssignmentChangeRow[] = [];
 	let assignmentRowsLoading = false;
 	let assignmentRowsError = '';
 	let eventCodeRows: EventCodeRow[] = [];
@@ -185,6 +212,12 @@
 	let assignmentListShiftFilter = '';
 	let assignmentSortOrderManuallySet = false;
 	let canAssignManagerRoleEffective = false;
+	let expandedShiftRows = new Set<number>();
+	let expandedAssignmentRows = new Set<string>();
+	let editingShiftHistoryStartDate = '';
+	let editingAssignmentHistoryStartDate = '';
+	let isEditingShiftHistoryEntry = false;
+	let isEditingAssignmentHistoryEntry = false;
 
 	const sections: { id: SetupSection; label: string }[] = [
 		{ id: 'users', label: 'Users' },
@@ -252,6 +285,27 @@
 		} catch {
 			// Keep setup actions successful even if background refresh fails.
 		}
+	}
+
+	type TeamSetupDependency =
+		| 'users'
+		| 'shifts'
+		| 'patterns'
+		| 'assignments'
+		| 'eventCodes'
+		| 'schedule';
+
+	async function refreshDependenciesAfterMutation(
+		dependencies: TeamSetupDependency[]
+	): Promise<void> {
+		const refreshTasks: Promise<void>[] = [];
+		if (dependencies.includes('users')) refreshTasks.push(loadTeamUsers());
+		if (dependencies.includes('shifts')) refreshTasks.push(loadTeamShifts());
+		if (dependencies.includes('patterns')) refreshTasks.push(loadPatterns());
+		if (dependencies.includes('assignments')) refreshTasks.push(loadAssignmentRows());
+		if (dependencies.includes('eventCodes')) refreshTasks.push(loadEventCodes());
+		if (dependencies.includes('schedule')) refreshTasks.push(refreshScheduleInBackground());
+		await Promise.all(refreshTasks);
 	}
 
 	function adjustNumericInput(
@@ -343,6 +397,8 @@
 	function resetShiftsPane() {
 		shiftsViewMode = 'list';
 		selectedShiftForEdit = null;
+		isEditingShiftHistoryEntry = false;
+		editingShiftHistoryStartDate = '';
 		addShiftName = '';
 		addShiftSortOrder = '1';
 		addShiftPatternId = '';
@@ -355,6 +411,8 @@
 
 	function openAddShiftView() {
 		selectedShiftForEdit = null;
+		isEditingShiftHistoryEntry = false;
+		editingShiftHistoryStartDate = '';
 		addShiftName = '';
 		addShiftSortOrder = String(teamShifts.length + 1);
 		addShiftPatternId = '';
@@ -371,10 +429,30 @@
 
 	function openEditShiftView(shift: ShiftRow) {
 		selectedShiftForEdit = shift;
+		isEditingShiftHistoryEntry = false;
+		editingShiftHistoryStartDate = '';
 		addShiftName = shift.name;
 		addShiftSortOrder = String(shift.sortOrder);
 		addShiftPatternId = shift.patternId ? String(shift.patternId) : '';
 		addShiftStartDate = shift.startDate;
+		shiftPatternPickerOpen = false;
+		shiftStartDatePickerOpen = false;
+		addShiftActionError = '';
+		addShiftActionLoading = false;
+		if (!patterns.length && !patternsLoading) {
+			void loadPatterns();
+		}
+		shiftsViewMode = 'edit';
+	}
+
+	function openEditShiftHistoryView(shift: ShiftRow, change: ShiftChangeRow) {
+		selectedShiftForEdit = shift;
+		isEditingShiftHistoryEntry = true;
+		editingShiftHistoryStartDate = change.startDate;
+		addShiftName = change.name;
+		addShiftSortOrder = String(shift.sortOrder);
+		addShiftPatternId = change.patternId ? String(change.patternId) : '';
+		addShiftStartDate = change.startDate;
 		shiftPatternPickerOpen = false;
 		shiftStartDatePickerOpen = false;
 		addShiftActionError = '';
@@ -438,8 +516,7 @@
 			if (!result.ok) {
 				throw new Error(await parseErrorMessage(result, 'Failed to save shift'));
 			}
-			await loadTeamShifts();
-			await refreshScheduleInBackground();
+			await refreshDependenciesAfterMutation(['shifts', 'assignments', 'schedule']);
 			resetShiftsPane();
 		} catch (error) {
 			addShiftActionError = error instanceof Error ? error.message : 'Failed to save shift';
@@ -481,18 +558,86 @@
 					name,
 					sortOrder,
 					patternId: patternId ? Number(patternId) : null,
-					startDate
+					startDate,
+					editMode: isEditingShiftHistoryEntry ? 'history' : 'timeline',
+					changeStartDate: isEditingShiftHistoryEntry ? editingShiftHistoryStartDate : null
 				})
 			});
 			if (!result) return;
 			if (!result.ok) {
 				throw new Error(await parseErrorMessage(result, 'Failed to save shift'));
 			}
-			await loadTeamShifts();
-			await refreshScheduleInBackground();
+			await refreshDependenciesAfterMutation(['shifts', 'assignments', 'schedule']);
 			resetShiftsPane();
 		} catch (error) {
 			addShiftActionError = error instanceof Error ? error.message : 'Failed to save shift';
+		} finally {
+			addShiftActionLoading = false;
+		}
+	}
+
+	async function handleRemoveShift() {
+		addShiftActionError = '';
+		if (addShiftActionLoading || !selectedShiftForEdit) return;
+
+		addShiftActionLoading = true;
+		try {
+			const removePayloadBase = {
+				employeeTypeId: selectedShiftForEdit.employeeTypeId,
+				editMode: isEditingShiftHistoryEntry ? 'history' : 'timeline',
+				changeStartDate: isEditingShiftHistoryEntry ? editingShiftHistoryStartDate : null
+			};
+
+			let result = await fetchWithAuthRedirect(`${base}/api/team/shifts`, {
+				method: 'DELETE',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify(removePayloadBase)
+			});
+			if (!result) return;
+
+			if (result.status === 409 && !isEditingShiftHistoryEntry) {
+				const text = (await result.text().catch(() => '')).trim();
+				let apiError: RemoveShiftErrorPayload = {};
+				if (text) {
+					try {
+						apiError = JSON.parse(text) as RemoveShiftErrorPayload;
+					} catch {
+						apiError = { message: text };
+					}
+				}
+
+				if (apiError.code === 'SHIFT_ACTIVE_ASSIGNMENTS') {
+					const activeCount = Number(apiError.activeAssignmentCount ?? 0);
+					const message =
+						activeCount > 0
+							? `This shift is currently assigned to ${activeCount} active ${
+									activeCount === 1 ? 'assignment' : 'assignments'
+								}. If you continue, active assignments will end effective today and future assignments will be removed. Continue?`
+							: 'This shift is currently assigned to active users. If you continue, active assignments will end effective today and future assignments will be removed. Continue?';
+					if (!window.confirm(message)) {
+						addShiftActionError = 'Shift removal canceled.';
+						return;
+					}
+
+					result = await fetchWithAuthRedirect(`${base}/api/team/shifts`, {
+						method: 'DELETE',
+						headers: { 'content-type': 'application/json' },
+						body: JSON.stringify({
+							...removePayloadBase,
+							confirmActiveAssignmentRemoval: true
+						})
+					});
+					if (!result) return;
+				}
+			}
+
+			if (!result.ok) {
+				throw new Error(await parseErrorMessage(result, 'Failed to remove shift'));
+			}
+			await refreshDependenciesAfterMutation(['shifts', 'assignments', 'schedule']);
+			resetShiftsPane();
+		} catch (error) {
+			addShiftActionError = error instanceof Error ? error.message : 'Failed to remove shift';
 		} finally {
 			addShiftActionLoading = false;
 		}
@@ -635,17 +780,14 @@
 				method: isEdit ? 'PATCH' : 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify(
-					isEdit
-						? { eventCodeId: selectedEventCodeForEdit.eventCodeId, ...payload }
-						: payload
+					isEdit ? { eventCodeId: selectedEventCodeForEdit.eventCodeId, ...payload } : payload
 				)
 			});
 			if (!result) return;
 			if (!result.ok) {
 				throw new Error(await parseErrorMessage(result, 'Failed to save event code'));
 			}
-			await loadEventCodes();
-			await refreshScheduleInBackground();
+			await refreshDependenciesAfterMutation(['eventCodes', 'schedule']);
 			resetEventCodesPane();
 		} catch (error) {
 			eventCodeActionError = error instanceof Error ? error.message : 'Failed to save event code';
@@ -658,6 +800,8 @@
 		stopAssignmentUserResultsDragging();
 		assignmentsViewMode = 'list';
 		selectedAssignmentForEdit = null;
+		isEditingAssignmentHistoryEntry = false;
+		editingAssignmentHistoryStartDate = '';
 		assignmentSortOrder = '1';
 		assignmentSortOrderManuallySet = false;
 		assignmentUserOid = '';
@@ -675,6 +819,8 @@
 	function openAddAssignmentView() {
 		stopAssignmentUserResultsDragging();
 		selectedAssignmentForEdit = null;
+		isEditingAssignmentHistoryEntry = false;
+		editingAssignmentHistoryStartDate = '';
 		assignmentSortOrder = '1';
 		assignmentSortOrderManuallySet = false;
 		assignmentUserOid = '';
@@ -693,10 +839,32 @@
 	function openEditAssignmentView(assignment: AssignmentRow) {
 		stopAssignmentUserResultsDragging();
 		selectedAssignmentForEdit = assignment;
+		isEditingAssignmentHistoryEntry = false;
+		editingAssignmentHistoryStartDate = '';
 		assignmentSortOrder = String(assignment.sortOrder);
 		assignmentSortOrderManuallySet = true;
 		assignmentUserOid = assignment.userOid;
 		assignmentUserQuery = resolveAssignmentUserName(assignment.userOid);
+		assignmentShiftEmployeeTypeId = String(assignment.shiftEmployeeTypeId);
+		assignmentStartDate = assignment.startDate;
+		assignmentUserResultsOpen = false;
+		resetAssignmentUserResultsScrollbarState();
+		assignmentShiftPickerOpen = false;
+		assignmentStartDatePickerOpen = false;
+		assignmentActionError = '';
+		assignmentActionLoading = false;
+		assignmentsViewMode = 'edit';
+	}
+
+	function openEditAssignmentHistoryView(assignment: AssignmentChangeRow) {
+		stopAssignmentUserResultsDragging();
+		selectedAssignmentForEdit = assignment;
+		isEditingAssignmentHistoryEntry = true;
+		editingAssignmentHistoryStartDate = assignment.startDate;
+		assignmentSortOrder = String(assignment.sortOrder);
+		assignmentSortOrderManuallySet = true;
+		assignmentUserOid = assignment.userOid;
+		assignmentUserQuery = assignment.userName ?? resolveAssignmentUserName(assignment.userOid);
 		assignmentShiftEmployeeTypeId = String(assignment.shiftEmployeeTypeId);
 		assignmentStartDate = assignment.startDate;
 		assignmentUserResultsOpen = false;
@@ -761,8 +929,9 @@
 	}
 
 	function countAssignmentsForShift(employeeTypeId: number): number {
-		return assignmentRows.filter((assignment) => assignment.shiftEmployeeTypeId === employeeTypeId)
-			.length;
+		return assignmentAllChanges.filter(
+			(assignment) => assignment.shiftEmployeeTypeId === employeeTypeId
+		).length;
 	}
 
 	function isAssignmentEffectiveOnDate(assignment: AssignmentRow, date: string): boolean {
@@ -776,7 +945,7 @@
 		date: string,
 		excludeAssignmentId: string | null = null
 	): number {
-		return assignmentRows.filter((assignment) => {
+		return assignmentAllChanges.filter((assignment) => {
 			if (assignment.shiftEmployeeTypeId !== employeeTypeId) return false;
 			if (excludeAssignmentId && assignment.assignmentId === excludeAssignmentId) return false;
 			return isAssignmentEffectiveOnDate(assignment, date);
@@ -898,6 +1067,7 @@
 	}
 
 	function onAssignmentUserComboMouseDown(event: MouseEvent) {
+		if (isEditingAssignmentHistoryEntry) return;
 		const target = event.target as HTMLElement | null;
 		if (target?.closest('.setupUserComboItem')) return;
 		assignmentUserResultsOpen = true;
@@ -1055,18 +1225,52 @@
 					sortOrder,
 					userOid,
 					shiftEmployeeTypeId: Number(shiftEmployeeTypeId),
-					startDate
+					startDate,
+					editMode: isEditingAssignmentHistoryEntry ? 'history' : 'timeline',
+					changeStartDate: isEditingAssignmentHistoryEntry
+						? editingAssignmentHistoryStartDate
+						: null
 				})
 			});
 			if (!result) return;
 			if (!result.ok) {
 				throw new Error(await parseErrorMessage(result, 'Failed to save assignment'));
 			}
-			await loadAssignmentRows();
-			await refreshScheduleInBackground();
+			await refreshDependenciesAfterMutation(['assignments', 'schedule']);
 			resetAssignmentsPane();
 		} catch (error) {
 			assignmentActionError = error instanceof Error ? error.message : 'Failed to save assignment';
+		} finally {
+			assignmentActionLoading = false;
+		}
+	}
+
+	async function handleRemoveAssignment() {
+		assignmentActionError = '';
+		if (assignmentActionLoading || !selectedAssignmentForEdit) return;
+
+		assignmentActionLoading = true;
+		try {
+			const result = await fetchWithAuthRedirect(`${base}/api/team/assignments`, {
+				method: 'DELETE',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					userOid: selectedAssignmentForEdit.userOid,
+					editMode: isEditingAssignmentHistoryEntry ? 'history' : 'timeline',
+					changeStartDate: isEditingAssignmentHistoryEntry
+						? editingAssignmentHistoryStartDate
+						: null
+				})
+			});
+			if (!result) return;
+			if (!result.ok) {
+				throw new Error(await parseErrorMessage(result, 'Failed to remove assignment'));
+			}
+			await refreshDependenciesAfterMutation(['assignments', 'schedule']);
+			resetAssignmentsPane();
+		} catch (error) {
+			assignmentActionError =
+				error instanceof Error ? error.message : 'Failed to remove assignment';
 		} finally {
 			assignmentActionLoading = false;
 		}
@@ -1576,8 +1780,7 @@
 			if (!result.ok) {
 				throw new Error(await parseErrorMessage(result, 'Failed to remove pattern'));
 			}
-			await loadPatterns();
-			await refreshScheduleInBackground();
+			await refreshDependenciesAfterMutation(['patterns', 'shifts', 'schedule']);
 			resetPatternsPane();
 		} catch (error) {
 			addPatternActionError = error instanceof Error ? error.message : 'Failed to remove pattern';
@@ -1587,15 +1790,13 @@
 	}
 
 	function compiledPatternSwatches(): PatternSwatch[] {
-		return patternColors
-			.map((color, swatchIndex) => ({
-				swatchIndex,
-				color: (color ?? patternColorSeedPalette[swatchIndex] ?? defaultPatternColor).toLowerCase(),
-				onDays: patternEditorDays.filter(
-					(_, dayIndex) => patternDayAssignments[dayIndex] === swatchIndex
-				)
-			}))
-			.filter((swatch) => swatch.onDays.length > 0);
+		return patternColors.map((color, swatchIndex) => ({
+			swatchIndex,
+			color: (color ?? patternColorSeedPalette[swatchIndex] ?? defaultPatternColor).toLowerCase(),
+			onDays: patternEditorDays.filter(
+				(_, dayIndex) => patternDayAssignments[dayIndex] === swatchIndex
+			)
+		}));
 	}
 
 	function compiledNoShiftDays(): number[] {
@@ -1654,8 +1855,7 @@
 			if (!result.ok) {
 				throw new Error(await parseErrorMessage(result, 'Failed to save pattern'));
 			}
-			await loadPatterns();
-			await refreshScheduleInBackground();
+			await refreshDependenciesAfterMutation(['patterns', 'shifts', 'schedule']);
 			resetPatternsPane();
 		} catch (error) {
 			addPatternActionError = error instanceof Error ? error.message : 'Failed to save pattern';
@@ -1709,6 +1909,34 @@
 		if (key === 'name') return shift.name;
 		if (key === 'pattern') return shift.pattern;
 		return shift.startDate;
+	}
+
+	function toggleShiftDetails(employeeTypeId: number) {
+		const next = new Set(expandedShiftRows);
+		if (next.has(employeeTypeId)) {
+			next.delete(employeeTypeId);
+		} else {
+			next.add(employeeTypeId);
+		}
+		expandedShiftRows = next;
+	}
+
+	function toggleAssignmentDetails(assignmentId: string) {
+		const next = new Set(expandedAssignmentRows);
+		if (next.has(assignmentId)) {
+			next.delete(assignmentId);
+		} else {
+			next.add(assignmentId);
+		}
+		expandedAssignmentRows = next;
+	}
+
+	function hasShiftHistoryChanges(shift: ShiftRow): boolean {
+		return (shift.changes?.length ?? 0) > 1;
+	}
+
+	function hasAssignmentHistoryChanges(assignment: AssignmentRow): boolean {
+		return (assignment.changes?.length ?? 0) > 1;
 	}
 
 	function toggleEventCodeSort(nextKey: EventCodeSortKey) {
@@ -1799,6 +2027,12 @@
 		assignmentActionError = '';
 		assignmentActionLoading = false;
 		assignmentListShiftFilter = '';
+		expandedShiftRows = new Set();
+		expandedAssignmentRows = new Set();
+		editingShiftHistoryStartDate = '';
+		editingAssignmentHistoryStartDate = '';
+		isEditingShiftHistoryEntry = false;
+		isEditingAssignmentHistoryEntry = false;
 		addPatternName = '';
 		addPatternActionError = '';
 		addPatternActionLoading = false;
@@ -1847,27 +2081,11 @@
 		return text;
 	}
 
-	function isAuthRedirectResponse(response: Response): boolean {
-		if (response.type === 'opaqueredirect') return true;
-		if (response.status === 302 || response.status === 401 || response.status === 403) return true;
-		return response.redirected && response.url.includes('/auth/login');
-	}
-
-	function redirectToLogin() {
-		if (typeof window === 'undefined') return;
-		window.location.assign(`${base}/auth/login`);
-	}
-
 	async function fetchWithAuthRedirect(
 		input: RequestInfo | URL,
 		init: RequestInit
 	): Promise<Response | null> {
-		const result = await fetch(input, { ...init, redirect: 'manual' });
-		if (isAuthRedirectResponse(result)) {
-			redirectToLogin();
-			return null;
-		}
-		return result;
+		return fetchWithAuthRedirectUtil(input, init, base);
 	}
 
 	function userLabel(user: EntraUser): string {
@@ -1947,6 +2165,7 @@
 						sortOrder: Number(shift.sortOrder ?? index + 1)
 					}))
 				: [];
+			expandedShiftRows = new Set();
 		} catch (error) {
 			teamShiftsError = error instanceof Error ? error.message : 'Failed to load shifts';
 		} finally {
@@ -1970,6 +2189,7 @@
 						sortOrder: Number(assignment.sortOrder ?? index + 1)
 					}))
 				: [];
+			expandedAssignmentRows = new Set();
 		} catch (error) {
 			assignmentRowsError = error instanceof Error ? error.message : 'Failed to load assignments';
 		} finally {
@@ -2125,8 +2345,7 @@
 			if (!result.ok) {
 				throw new Error(await parseErrorMessage(result, 'Failed to add user'));
 			}
-			await loadTeamUsers();
-			await refreshScheduleInBackground();
+			await refreshDependenciesAfterMutation(['users', 'assignments', 'schedule']);
 			resetUsersPane();
 		} catch (error) {
 			addUserActionError = error instanceof Error ? error.message : 'Failed to add user';
@@ -2153,8 +2372,7 @@
 			if (!result.ok) {
 				throw new Error(await parseErrorMessage(result, 'Failed to update user'));
 			}
-			await loadTeamUsers();
-			await refreshScheduleInBackground();
+			await refreshDependenciesAfterMutation(['users', 'assignments', 'schedule']);
 			resetUsersPane();
 		} catch (error) {
 			editUserActionError = error instanceof Error ? error.message : 'Failed to update user';
@@ -2217,8 +2435,7 @@
 			if (!result.ok) {
 				throw new Error(await parseErrorMessage(result, 'Failed to remove user'));
 			}
-			await loadTeamUsers();
-			await refreshScheduleInBackground();
+			await refreshDependenciesAfterMutation(['users', 'assignments', 'schedule']);
 			resetUsersPane();
 		} catch (error) {
 			editUserActionError = error instanceof Error ? error.message : 'Failed to remove user';
@@ -2359,12 +2576,22 @@
 		return sortDirection === 'asc' ? compare : -compare;
 	});
 
-	$: sortedShifts = [...teamShifts].sort((a, b) => {
-		const aValue = toComparableShiftValue(a, shiftSortKey);
-		const bValue = toComparableShiftValue(b, shiftSortKey);
-		const compare = aValue.localeCompare(bValue);
-		return shiftSortDirection === 'asc' ? compare : -compare;
-	});
+	$: sortedShifts = [...teamShifts]
+		.sort((a, b) => {
+			const aValue = toComparableShiftValue(a, shiftSortKey);
+			const bValue = toComparableShiftValue(b, shiftSortKey);
+			const compare = aValue.localeCompare(bValue);
+			return shiftSortDirection === 'asc' ? compare : -compare;
+		})
+		.map((shift) => ({
+			...shift,
+			changes: (shift.changes ?? [])
+				.map((change) => ({
+					...change,
+					pattern: change.pattern || 'Unassigned'
+				}))
+				.sort((a, b) => a.startDate.localeCompare(b.startDate))
+		}));
 	$: sortedEventCodes = [...eventCodeRows].sort((a, b) => {
 		const aValue = toComparableEventCodeValue(a, eventCodeSortKey);
 		const bValue = toComparableEventCodeValue(b, eventCodeSortKey);
@@ -2385,10 +2612,22 @@
 	] satisfies PickerItem[];
 	$: selectedShiftPatternLabel =
 		shiftPatternItems.find((item) => item.value === addShiftPatternId)?.label ?? 'Unassigned';
+	$: if (addShiftPatternId && !shiftPatternItems.some((item) => item.value === addShiftPatternId)) {
+		addShiftPatternId = '';
+	}
 	$: assignmentShiftItems = sortedShifts.map((shift) => ({
 		value: String(shift.employeeTypeId),
 		label: shift.name
 	})) satisfies PickerItem[];
+	$: if (
+		assignmentShiftEmployeeTypeId &&
+		!assignmentShiftItems.some((item) => item.value === assignmentShiftEmployeeTypeId)
+	) {
+		assignmentShiftEmployeeTypeId = '';
+		if (!isEditingAssignmentHistoryEntry) {
+			assignmentSortOrderManuallySet = false;
+		}
+	}
 	$: assignmentListShiftFilterItems = [
 		{ value: '', label: 'All shifts' },
 		...assignmentShiftItems
@@ -2397,6 +2636,10 @@
 	$: assignmentUserOptions = sortedUsers.filter((user) =>
 		assignmentUserMatchesQuery(user, assignmentUserQueryFilter)
 	);
+	$: if (assignmentUserOid && !sortedUsers.some((user) => user.userOid === assignmentUserOid)) {
+		assignmentUserOid = '';
+		assignmentUserQuery = '';
+	}
 	$: selectedAssignmentShiftLabel =
 		assignmentShiftItems.find((item) => item.value === assignmentShiftEmployeeTypeId)?.label ??
 		(teamShifts.length === 0 ? 'No shifts available' : 'Select shift');
@@ -2414,8 +2657,26 @@
 		.map((assignment) => ({
 			...assignment,
 			userName: assignment.userName ?? resolveAssignmentUserName(assignment.userOid),
-			shiftName: assignment.shiftName ?? resolveAssignmentShiftName(assignment.shiftEmployeeTypeId)
+			shiftName: assignment.shiftName ?? resolveAssignmentShiftName(assignment.shiftEmployeeTypeId),
+			changes: (assignment.changes ?? [])
+				.map((change) => ({
+					...change,
+					userName:
+						change.userName ?? assignment.userName ?? resolveAssignmentUserName(change.userOid),
+					shiftName:
+						change.shiftName ??
+						resolveAssignmentShiftName(change.shiftEmployeeTypeId) ??
+						'Unknown shift'
+				}))
+				.sort((a, b) => a.startDate.localeCompare(b.startDate))
 		}));
+	$: assignmentAllChanges = assignmentDisplayRows
+		.flatMap((assignment) => assignment.changes ?? [])
+		.sort((a, b) => {
+			const startCompare = a.startDate.localeCompare(b.startDate);
+			if (startCompare !== 0) return startCompare;
+			return a.assignmentId.localeCompare(b.assignmentId);
+		});
 	$: assignmentFilteredRows = assignmentDisplayRows.filter((assignment) => {
 		if (!assignmentListShiftFilter) return true;
 		return String(assignment.shiftEmployeeTypeId) === assignmentListShiftFilter;
@@ -2648,7 +2909,6 @@
 				<header class="teamSetupHeader">
 					<div>
 						<h2 id="team-setup-title">Team Setup</h2>
-						<p>Manage schedule users, shifts, patterns, event codes, and assignments.</p>
 					</div>
 					<button class="btn" type="button" on:click={closeModal}>Close</button>
 				</header>
@@ -2688,7 +2948,7 @@
 
 								{#if usersViewMode === 'list'}
 									<div class="setupCard">
-										<div class="tableWrap">
+										<HorizontalScrollArea>
 											<table class="setupTable">
 												<thead>
 													<tr>
@@ -2775,7 +3035,7 @@
 													{/if}
 												</tbody>
 											</table>
-										</div>
+										</HorizontalScrollArea>
 									</div>
 								{:else if usersViewMode === 'add'}
 									<div class="setupCard">
@@ -3036,113 +3296,186 @@
 										{:else if sortedShifts.length === 0}
 											<p>No shifts yet.</p>
 										{:else}
-											<table class="setupTable">
-												<thead>
-													<tr>
-														<th aria-sort={ariaSortForShift('order')}>
-															<button
-																type="button"
-																class="tableSortBtn"
-																on:click={() => toggleShiftSort('order')}
-															>
-																Order
-																<span
-																	class={`sortIndicator${shiftSortKey === 'order' ? ' active' : ''}`}
-																	aria-hidden="true"
-																>
-																	{shiftSortKey === 'order'
-																		? shiftSortDirection === 'asc'
-																			? '↑'
-																			: '↓'
-																		: '↕'}
-																</span>
-															</button>
-														</th>
-														<th aria-sort={ariaSortForShift('name')}>
-															<button
-																type="button"
-																class="tableSortBtn"
-																on:click={() => toggleShiftSort('name')}
-															>
-																Shift
-																<span
-																	class={`sortIndicator${shiftSortKey === 'name' ? ' active' : ''}`}
-																	aria-hidden="true"
-																>
-																	{shiftSortKey === 'name'
-																		? shiftSortDirection === 'asc'
-																			? '↑'
-																			: '↓'
-																		: '↕'}
-																</span>
-															</button>
-														</th>
-														<th aria-sort={ariaSortForShift('pattern')}>
-															<button
-																type="button"
-																class="tableSortBtn"
-																on:click={() => toggleShiftSort('pattern')}
-															>
-																Pattern
-																<span
-																	class={`sortIndicator${shiftSortKey === 'pattern' ? ' active' : ''}`}
-																	aria-hidden="true"
-																>
-																	{shiftSortKey === 'pattern'
-																		? shiftSortDirection === 'asc'
-																			? '↑'
-																			: '↓'
-																		: '↕'}
-																</span>
-															</button>
-														</th>
-														<th aria-sort={ariaSortForShift('start')}>
-															<button
-																type="button"
-																class="tableSortBtn"
-																on:click={() => toggleShiftSort('start')}
-															>
-																Current Effective
-																<span
-																	class={`sortIndicator${shiftSortKey === 'start' ? ' active' : ''}`}
-																	aria-hidden="true"
-																>
-																	{shiftSortKey === 'start'
-																		? shiftSortDirection === 'asc'
-																			? '↑'
-																			: '↓'
-																		: '↕'}
-																</span>
-															</button>
-														</th>
-														<th></th>
-													</tr>
-												</thead>
-												<tbody>
-													{#each sortedShifts as shift}
+											<HorizontalScrollArea>
+												<table class="setupTable">
+													<thead>
 														<tr>
-															<td>{shift.sortOrder}</td>
-															<td>{shift.name}</td>
-															<td>{shift.pattern || 'Unassigned'}</td>
-															<td>{shift.startDate}</td>
-															<td>
+															<th aria-sort={ariaSortForShift('order')}>
 																<button
 																	type="button"
-																	class="btn"
-																	on:click={() => openEditShiftView(shift)}
+																	class="tableSortBtn"
+																	on:click={() => toggleShiftSort('order')}
 																>
-																	Edit
+																	Order
+																	<span
+																		class={`sortIndicator${shiftSortKey === 'order' ? ' active' : ''}`}
+																		aria-hidden="true"
+																	>
+																		{shiftSortKey === 'order'
+																			? shiftSortDirection === 'asc'
+																				? '↑'
+																				: '↓'
+																			: '↕'}
+																	</span>
 																</button>
-															</td>
+															</th>
+															<th aria-sort={ariaSortForShift('name')}>
+																<button
+																	type="button"
+																	class="tableSortBtn"
+																	on:click={() => toggleShiftSort('name')}
+																>
+																	Shift
+																	<span
+																		class={`sortIndicator${shiftSortKey === 'name' ? ' active' : ''}`}
+																		aria-hidden="true"
+																	>
+																		{shiftSortKey === 'name'
+																			? shiftSortDirection === 'asc'
+																				? '↑'
+																				: '↓'
+																			: '↕'}
+																	</span>
+																</button>
+															</th>
+															<th aria-sort={ariaSortForShift('pattern')}>
+																<button
+																	type="button"
+																	class="tableSortBtn"
+																	on:click={() => toggleShiftSort('pattern')}
+																>
+																	Pattern
+																	<span
+																		class={`sortIndicator${shiftSortKey === 'pattern' ? ' active' : ''}`}
+																		aria-hidden="true"
+																	>
+																		{shiftSortKey === 'pattern'
+																			? shiftSortDirection === 'asc'
+																				? '↑'
+																				: '↓'
+																			: '↕'}
+																	</span>
+																</button>
+															</th>
+															<th aria-sort={ariaSortForShift('start')}>
+																<button
+																	type="button"
+																	class="tableSortBtn"
+																	on:click={() => toggleShiftSort('start')}
+																>
+																	Start Date
+																	<span
+																		class={`sortIndicator${shiftSortKey === 'start' ? ' active' : ''}`}
+																		aria-hidden="true"
+																	>
+																		{shiftSortKey === 'start'
+																			? shiftSortDirection === 'asc'
+																				? '↑'
+																				: '↓'
+																			: '↕'}
+																	</span>
+																</button>
+															</th>
+															<th>Changes</th>
+															<th></th>
 														</tr>
-													{/each}
-												</tbody>
-											</table>
+													</thead>
+													<tbody>
+														{#each sortedShifts as shift}
+															<tr>
+																<td>{shift.sortOrder}</td>
+																<td>{shift.name}</td>
+																<td>{shift.pattern || 'Unassigned'}</td>
+																<td>{shift.startDate}</td>
+																<td>
+																	{#if hasShiftHistoryChanges(shift)}
+																		<button
+																			type="button"
+																			class="rowChevronBtn"
+																			aria-label={expandedShiftRows.has(shift.employeeTypeId)
+																				? 'Hide shift change history'
+																				: 'Show shift change history'}
+																			aria-expanded={expandedShiftRows.has(shift.employeeTypeId)}
+																			on:click={() => toggleShiftDetails(shift.employeeTypeId)}
+																		>
+																			{expandedShiftRows.has(shift.employeeTypeId)
+																				? 'Hide'
+																				: 'Show'}
+																		</button>
+																	{:else}
+																		None
+																	{/if}
+																</td>
+																<td>
+																	<button
+																		type="button"
+																		class="btn"
+																		on:click={() => openEditShiftView(shift)}
+																	>
+																		Edit
+																	</button>
+																</td>
+															</tr>
+															{#if hasShiftHistoryChanges(shift) && expandedShiftRows.has(shift.employeeTypeId)}
+																<tr class="setupDetailsRow">
+																	<td colspan="6">
+																		<HorizontalScrollArea>
+																			<table class="setupSubTable">
+																				<thead>
+																					<tr>
+																						<th>Name</th>
+																						<th>Pattern</th>
+																						<th>Effective Start</th>
+																						<th>Effective End</th>
+																						<th></th>
+																					</tr>
+																				</thead>
+																				<tbody>
+																					{#if !shift.changes || shift.changes.length === 0}
+																						<tr>
+																							<td colspan="5">No changes found.</td>
+																						</tr>
+																					{:else}
+																						{#each shift.changes as change}
+																							<tr>
+																								<td>{change.name}</td>
+																								<td>{change.pattern || 'Unassigned'}</td>
+																								<td>{change.startDate}</td>
+																								<td>{change.endDate ?? 'Current'}</td>
+																								<td>
+																									<button
+																										type="button"
+																										class="btn"
+																										on:click={() =>
+																											openEditShiftHistoryView(shift, change)}
+																									>
+																										Edit
+																									</button>
+																								</td>
+																							</tr>
+																						{/each}
+																					{/if}
+																				</tbody>
+																			</table>
+																		</HorizontalScrollArea>
+																	</td>
+																</tr>
+															{/if}
+														{/each}
+													</tbody>
+												</table>
+											</HorizontalScrollArea>
 										{/if}
 									</div>
 								{:else}
 									<div class="setupCard">
-										<h4>{shiftsViewMode === 'edit' ? 'Edit Shift' : 'Add Shift'}</h4>
+										<h4>
+											{shiftsViewMode === 'edit'
+												? isEditingShiftHistoryEntry
+													? 'Edit Shift Change'
+													: 'Edit Shift'
+												: 'Add Shift'}
+										</h4>
 										<div class="setupShiftForm">
 											<label class="setupShiftNameField">
 												Shift Name
@@ -3248,6 +3581,19 @@
 											</div>
 										</div>
 										<div class="setupActions">
+											{#if shiftsViewMode === 'edit'}
+												<button
+													type="button"
+													class="iconActionBtn danger actionBtn"
+													on:click={handleRemoveShift}
+													disabled={addShiftActionLoading}
+												>
+													<svg viewBox="0 0 24 24" aria-hidden="true">
+														<path d="M4 7h16M9 7V5h6v2M9 10v8M15 10v8M7 7l1 13h8l1-13" />
+													</svg>
+													Remove
+												</button>
+											{/if}
 											<button
 												type="button"
 												class="iconActionBtn actionBtn"
@@ -3300,46 +3646,48 @@
 								</div>
 								{#if patternsViewMode === 'list'}
 									<div class="setupCard">
-										<table class="setupTable">
-											<thead>
-												<tr>
-													<th>Pattern</th>
-													<th>Summary</th>
-													<th></th>
-												</tr>
-											</thead>
-											<tbody>
-												{#if patternsLoading}
+										<HorizontalScrollArea>
+											<table class="setupTable">
+												<thead>
 													<tr>
-														<td colspan="3">Loading patterns...</td>
+														<th>Pattern</th>
+														<th>Summary</th>
+														<th></th>
 													</tr>
-												{:else if patternsError}
-													<tr>
-														<td colspan="3">{patternsError}</td>
-													</tr>
-												{:else if patterns.length === 0}
-													<tr>
-														<td colspan="3">No patterns found for this schedule.</td>
-													</tr>
-												{:else}
-													{#each patterns as pattern}
+												</thead>
+												<tbody>
+													{#if patternsLoading}
 														<tr>
-															<td>{pattern.name}</td>
-															<td>{pattern.summary}</td>
-															<td>
-																<button
-																	type="button"
-																	class="btn"
-																	on:click={() => openEditPatternView(pattern)}
-																>
-																	Edit
-																</button>
-															</td>
+															<td colspan="3">Loading patterns...</td>
 														</tr>
-													{/each}
-												{/if}
-											</tbody>
-										</table>
+													{:else if patternsError}
+														<tr>
+															<td colspan="3">{patternsError}</td>
+														</tr>
+													{:else if patterns.length === 0}
+														<tr>
+															<td colspan="3">No patterns found for this schedule.</td>
+														</tr>
+													{:else}
+														{#each patterns as pattern}
+															<tr>
+																<td>{pattern.name}</td>
+																<td>{pattern.summary}</td>
+																<td>
+																	<button
+																		type="button"
+																		class="btn"
+																		on:click={() => openEditPatternView(pattern)}
+																	>
+																		Edit
+																	</button>
+																</td>
+															</tr>
+														{/each}
+													{/if}
+												</tbody>
+											</table>
+										</HorizontalScrollArea>
 									</div>
 								{:else}
 									<div class="setupCard">
@@ -3484,13 +3832,13 @@
 										</div>
 										<div class="setupActions">
 											{#if patternsViewMode === 'edit'}
-													<button
-														type="button"
-														class="iconActionBtn danger actionBtn"
-														on:click={handleRemovePattern}
-														disabled={addPatternActionLoading}
-														title="Remove pattern"
-													>
+												<button
+													type="button"
+													class="iconActionBtn danger actionBtn"
+													on:click={handleRemovePattern}
+													disabled={addPatternActionLoading}
+													title="Remove pattern"
+												>
 													<svg viewBox="0 0 24 24" aria-hidden="true">
 														<path d="M4 7h16M9 7V5h6v2M9 10v8M15 10v8M7 7l1 13h8l1-13" />
 													</svg>
@@ -3574,51 +3922,129 @@
 													</div>
 												</div>
 											</div>
-											<table class="setupTable">
-												<thead>
-													<tr>
-														<th>User</th>
-														<th>Shift</th>
-														<th>Order</th>
-														<th>Start Date</th>
-														<th></th>
-													</tr>
-												</thead>
-												<tbody>
-													{#if assignmentFilteredRows.length === 0}
+											<HorizontalScrollArea>
+												<table class="setupTable">
+													<thead>
 														<tr>
-															<td colspan="5"
-																>{assignmentListShiftFilter
-																	? 'No assignments found for this shift filter.'
-																	: 'No assignments yet.'}</td
-															>
+															<th>User</th>
+															<th>Shift</th>
+															<th>Order</th>
+															<th>Start Date</th>
+															<th>Changes</th>
+															<th></th>
 														</tr>
-													{:else}
-														{#each assignmentFilteredRows as assignment}
+													</thead>
+													<tbody>
+														{#if assignmentFilteredRows.length === 0}
 															<tr>
-																<td>{assignment.userName}</td>
-																<td>{assignment.shiftName}</td>
-																<td>{assignment.sortOrder}</td>
-																<td>{assignment.startDate}</td>
-																<td>
-																	<button
-																		type="button"
-																		class="btn"
-																		on:click={() => openEditAssignmentView(assignment)}
-																	>
-																		Edit
-																	</button>
-																</td>
+																<td colspan="6"
+																	>{assignmentListShiftFilter
+																		? 'No assignments found for this shift filter.'
+																		: 'No assignments yet.'}</td
+																>
 															</tr>
-														{/each}
-													{/if}
-												</tbody>
-											</table>
+														{:else}
+															{#each assignmentFilteredRows as assignment}
+																<tr>
+																	<td>{assignment.userName}</td>
+																	<td>{assignment.shiftName}</td>
+																	<td>{assignment.sortOrder}</td>
+																	<td>{assignment.startDate}</td>
+																	<td>
+																		{#if hasAssignmentHistoryChanges(assignment)}
+																			<button
+																				type="button"
+																				class="rowChevronBtn"
+																				aria-label={expandedAssignmentRows.has(
+																					assignment.assignmentId
+																				)
+																					? 'Hide assignment change history'
+																					: 'Show assignment change history'}
+																				aria-expanded={expandedAssignmentRows.has(
+																					assignment.assignmentId
+																				)}
+																				on:click={() =>
+																					toggleAssignmentDetails(assignment.assignmentId)}
+																			>
+																				{expandedAssignmentRows.has(assignment.assignmentId)
+																					? 'Hide'
+																					: 'Show'}
+																			</button>
+																		{:else}
+																			None
+																		{/if}
+																	</td>
+																	<td>
+																		<button
+																			type="button"
+																			class="btn"
+																			on:click={() => openEditAssignmentView(assignment)}
+																		>
+																			Edit
+																		</button>
+																	</td>
+																</tr>
+																{#if hasAssignmentHistoryChanges(assignment) && expandedAssignmentRows.has(assignment.assignmentId)}
+																	<tr class="setupDetailsRow">
+																		<td colspan="6">
+																			<HorizontalScrollArea>
+																				<table class="setupSubTable">
+																					<thead>
+																						<tr>
+																							<th>Shift</th>
+																							<th>Order</th>
+																							<th>Effective Start</th>
+																							<th>Effective End</th>
+																							<th></th>
+																						</tr>
+																					</thead>
+																					<tbody>
+																						{#if !assignment.changes || assignment.changes.length === 0}
+																							<tr>
+																								<td colspan="5">No changes found.</td>
+																							</tr>
+																						{:else}
+																							{#each assignment.changes as change}
+																								<tr>
+																									<td>{change.shiftName}</td>
+																									<td>{change.sortOrder}</td>
+																									<td>{change.startDate}</td>
+																									<td>{change.endDate ?? 'Current'}</td>
+																									<td>
+																										<button
+																											type="button"
+																											class="btn"
+																											on:click={() =>
+																												openEditAssignmentHistoryView(change)}
+																										>
+																											Edit
+																										</button>
+																									</td>
+																								</tr>
+																							{/each}
+																						{/if}
+																					</tbody>
+																				</table>
+																			</HorizontalScrollArea>
+																		</td>
+																	</tr>
+																{/if}
+															{/each}
+														{/if}
+													</tbody>
+												</table>
+											</HorizontalScrollArea>
 										{/if}
 									</div>
 								{:else}
 									<div class="setupCard">
-										<h4>{assignmentsViewMode === 'edit' ? 'Edit Assignment' : 'Add Assignment'}</h4>
+										<h4>
+											{assignmentsViewMode === 'edit'
+												? isEditingAssignmentHistoryEntry
+													? 'Edit Assignment Change'
+													: 'Edit Assignment'
+												: 'Add Assignment'}
+										</h4>
 										<div class="setupShiftForm">
 											<div class="setupField">
 												<span class="setupFieldLabel">User</span>
@@ -3642,9 +4068,9 @@
 														on:focus={onAssignmentUserFocus}
 														aria-autocomplete="list"
 														aria-controls="assignment-user-results"
-														disabled={teamUsers.length === 0}
+														disabled={teamUsers.length === 0 || isEditingAssignmentHistoryEntry}
 													/>
-													{#if assignmentUserResultsOpen && teamUsers.length > 0}
+													{#if assignmentUserResultsOpen && teamUsers.length > 0 && !isEditingAssignmentHistoryEntry}
 														<div
 															id="assignment-user-results"
 															class="setupUserComboList setupUserComboListCustom"
@@ -3776,6 +4202,19 @@
 											</div>
 										</div>
 										<div class="setupActions">
+											{#if assignmentsViewMode === 'edit'}
+												<button
+													type="button"
+													class="iconActionBtn danger actionBtn"
+													on:click={handleRemoveAssignment}
+													disabled={assignmentActionLoading}
+												>
+													<svg viewBox="0 0 24 24" aria-hidden="true">
+														<path d="M4 7h16M9 7V5h6v2M9 10v8M15 10v8M7 7l1 13h8l1-13" />
+													</svg>
+													Remove
+												</button>
+											{/if}
 											<button
 												type="button"
 												class="iconActionBtn actionBtn"
@@ -3829,139 +4268,141 @@
 
 								{#if eventCodesViewMode === 'list'}
 									<div class="setupCard">
-										<table class="setupTable">
-											<thead>
-												<tr>
-													<th aria-sort={ariaSortForEventCode('code')}>
-														<button
-															type="button"
-															class="tableSortBtn"
-															on:click={() => toggleEventCodeSort('code')}
-														>
-															Code
-															<span
-																class={`sortIndicator${eventCodeSortKey === 'code' ? ' active' : ''}`}
-																aria-hidden="true"
-															>
-																{eventCodeSortKey === 'code'
-																	? eventCodeSortDirection === 'asc'
-																		? '↑'
-																		: '↓'
-																	: '↕'}
-															</span>
-														</button>
-													</th>
-													<th aria-sort={ariaSortForEventCode('name')}>
-														<button
-															type="button"
-															class="tableSortBtn"
-															on:click={() => toggleEventCodeSort('name')}
-														>
-															Name
-															<span
-																class={`sortIndicator${eventCodeSortKey === 'name' ? ' active' : ''}`}
-																aria-hidden="true"
-															>
-																{eventCodeSortKey === 'name'
-																	? eventCodeSortDirection === 'asc'
-																		? '↑'
-																		: '↓'
-																	: '↕'}
-															</span>
-														</button>
-													</th>
-													<th aria-sort={ariaSortForEventCode('displayMode')}>
-														<button
-															type="button"
-															class="tableSortBtn"
-															on:click={() => toggleEventCodeSort('displayMode')}
-														>
-															Display
-															<span
-																class={`sortIndicator${eventCodeSortKey === 'displayMode' ? ' active' : ''}`}
-																aria-hidden="true"
-															>
-																{eventCodeSortKey === 'displayMode'
-																	? eventCodeSortDirection === 'asc'
-																		? '↑'
-																		: '↓'
-																	: '↕'}
-															</span>
-														</button>
-													</th>
-													<th aria-sort={ariaSortForEventCode('status')}>
-														<button
-															type="button"
-															class="tableSortBtn"
-															on:click={() => toggleEventCodeSort('status')}
-														>
-															Status
-															<span
-																class={`sortIndicator${eventCodeSortKey === 'status' ? ' active' : ''}`}
-																aria-hidden="true"
-															>
-																{eventCodeSortKey === 'status'
-																	? eventCodeSortDirection === 'asc'
-																		? '↑'
-																		: '↓'
-																	: '↕'}
-															</span>
-														</button>
-													</th>
-													<th></th>
-												</tr>
-											</thead>
-											<tbody>
-												{#if eventCodeRowsLoading}
+										<HorizontalScrollArea>
+											<table class="setupTable">
+												<thead>
 													<tr>
-														<td colspan="5">Loading event codes...</td>
-													</tr>
-												{:else if eventCodeRowsError}
-													<tr>
-														<td colspan="5">{eventCodeRowsError}</td>
-													</tr>
-												{:else if sortedEventCodes.length === 0}
-													<tr>
-														<td colspan="5">No event codes yet.</td>
-													</tr>
-												{:else}
-													{#each sortedEventCodes as eventCode}
-														<tr>
-															<td>
-																<div class="eventCodeInline">
-																	<span
-																		class="eventCodeColorDot"
-																		aria-hidden="true"
-																		style={`background:${eventCode.color};`}
-																	></span>
-																	<span>{eventCode.code}</span>
-																</div>
-															</td>
-															<td>{eventCode.name}</td>
-															<td>
-																<span class="eventCodeMetaPill">{eventCode.displayMode}</span>
-															</td>
-															<td>
+														<th aria-sort={ariaSortForEventCode('code')}>
+															<button
+																type="button"
+																class="tableSortBtn"
+																on:click={() => toggleEventCodeSort('code')}
+															>
+																Code
 																<span
-																	class={`eventCodeStatusPill${eventCode.isActive ? ' active' : ''}`}
+																	class={`sortIndicator${eventCodeSortKey === 'code' ? ' active' : ''}`}
+																	aria-hidden="true"
 																>
-																	{eventCode.isActive ? 'Available' : 'Disabled'}
+																	{eventCodeSortKey === 'code'
+																		? eventCodeSortDirection === 'asc'
+																			? '↑'
+																			: '↓'
+																		: '↕'}
 																</span>
-															</td>
-															<td>
-																<button
-																	type="button"
-																	class="btn"
-																	on:click={() => openEditEventCodeView(eventCode)}
+															</button>
+														</th>
+														<th aria-sort={ariaSortForEventCode('name')}>
+															<button
+																type="button"
+																class="tableSortBtn"
+																on:click={() => toggleEventCodeSort('name')}
+															>
+																Name
+																<span
+																	class={`sortIndicator${eventCodeSortKey === 'name' ? ' active' : ''}`}
+																	aria-hidden="true"
 																>
-																	Edit
-																</button>
-															</td>
+																	{eventCodeSortKey === 'name'
+																		? eventCodeSortDirection === 'asc'
+																			? '↑'
+																			: '↓'
+																		: '↕'}
+																</span>
+															</button>
+														</th>
+														<th aria-sort={ariaSortForEventCode('displayMode')}>
+															<button
+																type="button"
+																class="tableSortBtn"
+																on:click={() => toggleEventCodeSort('displayMode')}
+															>
+																Display
+																<span
+																	class={`sortIndicator${eventCodeSortKey === 'displayMode' ? ' active' : ''}`}
+																	aria-hidden="true"
+																>
+																	{eventCodeSortKey === 'displayMode'
+																		? eventCodeSortDirection === 'asc'
+																			? '↑'
+																			: '↓'
+																		: '↕'}
+																</span>
+															</button>
+														</th>
+														<th aria-sort={ariaSortForEventCode('status')}>
+															<button
+																type="button"
+																class="tableSortBtn"
+																on:click={() => toggleEventCodeSort('status')}
+															>
+																Status
+																<span
+																	class={`sortIndicator${eventCodeSortKey === 'status' ? ' active' : ''}`}
+																	aria-hidden="true"
+																>
+																	{eventCodeSortKey === 'status'
+																		? eventCodeSortDirection === 'asc'
+																			? '↑'
+																			: '↓'
+																		: '↕'}
+																</span>
+															</button>
+														</th>
+														<th></th>
+													</tr>
+												</thead>
+												<tbody>
+													{#if eventCodeRowsLoading}
+														<tr>
+															<td colspan="5">Loading event codes...</td>
 														</tr>
-													{/each}
-												{/if}
-											</tbody>
-										</table>
+													{:else if eventCodeRowsError}
+														<tr>
+															<td colspan="5">{eventCodeRowsError}</td>
+														</tr>
+													{:else if sortedEventCodes.length === 0}
+														<tr>
+															<td colspan="5">No event codes yet.</td>
+														</tr>
+													{:else}
+														{#each sortedEventCodes as eventCode}
+															<tr>
+																<td>
+																	<div class="eventCodeInline">
+																		<span
+																			class="eventCodeColorDot"
+																			aria-hidden="true"
+																			style={`background:${eventCode.color};`}
+																		></span>
+																		<span>{eventCode.code}</span>
+																	</div>
+																</td>
+																<td>{eventCode.name}</td>
+																<td>
+																	<span class="eventCodeMetaPill">{eventCode.displayMode}</span>
+																</td>
+																<td>
+																	<span
+																		class={`eventCodeStatusPill${eventCode.isActive ? ' active' : ''}`}
+																	>
+																		{eventCode.isActive ? 'Available' : 'Disabled'}
+																	</span>
+																</td>
+																<td>
+																	<button
+																		type="button"
+																		class="btn"
+																		on:click={() => openEditEventCodeView(eventCode)}
+																	>
+																		Edit
+																	</button>
+																</td>
+															</tr>
+														{/each}
+													{/if}
+												</tbody>
+											</table>
+										</HorizontalScrollArea>
 									</div>
 								{:else}
 									<div class="setupCard">

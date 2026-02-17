@@ -1,8 +1,8 @@
 <script lang="ts">
   import type { MonthDay } from '$lib/utils/date';
   import { indicatorFor } from '$lib/utils/status';
-  import type { Employee, ScheduleEvent, Status } from '$lib/data/demoData';
-  import { resolveCellEventVisuals } from '$lib/utils/scheduleEvents';
+  import type { Employee, ScheduleEvent, Status } from '$lib/types/schedule';
+  import { hasHoverEventsForCell, resolveCellEventVisuals } from '$lib/utils/scheduleEvents';
 
   export let employee: Employee;
   export let groupName = '';
@@ -22,6 +22,15 @@
   export let isLastVisibleRow = false;
   export let isLastInGroup = false;
   export let onDoubleClickDayCell: (employee: Employee, day: MonthDay) => void = () => {};
+  export let onHoverDayCell: (
+    day: MonthDay,
+    cellEl: HTMLElement,
+    pointer: { clientX: number; clientY: number }
+  ) => void = () => {};
+  export let onLeaveDayCell: () => void = () => {};
+  const DOUBLE_TAP_WINDOW_MS = 320;
+  let lastTouchTapDay: number | null = null;
+  let lastTouchTapAtMs = 0;
 
   $: overrideByDay = new Map(
     (overrides[employee.name] ?? []).map((item) => [item.day, item.status] as const)
@@ -38,12 +47,18 @@
       employeeTypeId,
       userOid: employee.userOid ?? null
     });
+    const hasHoverEvents = hasHoverEventsForCell(events, dayIso, {
+      scopeType: 'user',
+      employeeTypeId,
+      userOid: employee.userOid ?? null
+    });
     return {
       day,
       status: eventStatus,
       indicator: eventStatus ? indicatorFor(eventStatus) : null,
       dayColor,
-      eventVisuals
+      eventVisuals,
+      hasHoverEvents
     };
   });
 
@@ -59,6 +74,18 @@
 
   function handleRowDoubleClick() {
     onOpenDisplayNameEditor(employee);
+  }
+
+  function handleDayCellTouchEnd(day: MonthDay, event: TouchEvent) {
+    const now = Date.now();
+    const isDoubleTap = lastTouchTapDay === day.day && now - lastTouchTapAtMs <= DOUBLE_TAP_WINDOW_MS;
+    lastTouchTapDay = day.day;
+    lastTouchTapAtMs = now;
+    if (!isDoubleTap) return;
+    event.preventDefault();
+    lastTouchTapDay = null;
+    lastTouchTapAtMs = 0;
+    onDoubleClickDayCell(employee, day);
   }
 </script>
 
@@ -93,6 +120,22 @@
     tabindex="-1"
     style={cell.dayColor ? `--pattern-cell-bg:${cell.dayColor};` : undefined}
     on:dblclick={() => onDoubleClickDayCell(employee, cell.day)}
+    on:touchend={(event) => handleDayCellTouchEnd(cell.day, event)}
+    on:mouseenter={(event) => {
+      if (!cell.hasHoverEvents) return;
+      onHoverDayCell(cell.day, event.currentTarget as HTMLElement, {
+        clientX: event.clientX,
+        clientY: event.clientY
+      });
+    }}
+    on:mousemove={(event) => {
+      if (!cell.hasHoverEvents) return;
+      onHoverDayCell(cell.day, event.currentTarget as HTMLElement, {
+        clientX: event.clientX,
+        clientY: event.clientY
+      });
+    }}
+    on:mouseleave={onLeaveDayCell}
   >
     {#if cell.eventVisuals.overrideBackground}
       <div

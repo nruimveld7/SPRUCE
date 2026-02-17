@@ -24,6 +24,31 @@ BEGIN
     ADD DefaultScheduleId int NULL;
 END;
 
+IF COL_LENGTH('dbo.Users', 'ScheduleUiStateJson') IS NULL
+BEGIN
+    ALTER TABLE dbo.Users
+    ADD ScheduleUiStateJson nvarchar(max) NULL;
+END;
+
+IF COL_LENGTH('dbo.Users', 'ScheduleUiStateJson') IS NOT NULL
+BEGIN
+    EXEC(N'
+        UPDATE dbo.Users
+           SET ScheduleUiStateJson = NULL
+         WHERE ScheduleUiStateJson IS NOT NULL
+           AND ISJSON(ScheduleUiStateJson) <> 1;
+    ');
+END;
+
+IF OBJECT_ID('dbo.CK_Users_ScheduleUiStateJson_IsJson', 'C') IS NULL
+BEGIN
+    EXEC(N'
+        ALTER TABLE dbo.Users
+        ADD CONSTRAINT CK_Users_ScheduleUiStateJson_IsJson
+        CHECK (ScheduleUiStateJson IS NULL OR ISJSON(ScheduleUiStateJson) = 1);
+    ');
+END;
+
 IF NOT EXISTS (
     SELECT 1
     FROM sys.foreign_keys

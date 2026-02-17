@@ -1,6 +1,7 @@
 <script lang="ts">
   import AppShell from '$lib/components/AppShell.svelte';
   type ScheduleRole = 'Member' | 'Maintainer' | 'Manager';
+  type ThemePreference = 'system' | 'dark' | 'light';
   type ScheduleMembership = {
     ScheduleId: number;
     Name: string;
@@ -14,6 +15,8 @@
     userRole: ScheduleRole | null;
     scheduleMemberships: ScheduleMembership[];
     currentUserOid: string | null;
+    collapsedGroupsBySchedule: Record<number, Record<string, boolean>>;
+    themePreference: ThemePreference;
   };
 
   let scheduleName = 'Shift Schedule';
@@ -38,4 +41,6 @@
   {canAssignManagerRole}
   {canOpenScheduleSetup}
   currentUserOid={data.currentUserOid ?? ''}
+  collapsedGroupsBySchedule={data.collapsedGroupsBySchedule}
+  themePreference={data.themePreference}
 />

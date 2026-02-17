@@ -192,12 +192,21 @@ function pemToDer(pem: string): Buffer {
 }
 
 type TokenResponse = {
-	id_token: string;
+	id_token?: string;
 	access_token: string;
 	refresh_token?: string;
 	expires_in: number;
 	token_type?: string;
 	scope?: string;
+};
+
+type SessionRow = {
+	UserOid: string;
+	Email: string | null;
+	Name: string | null;
+	AccessToken: string;
+	RefreshToken: string | null;
+	ExpiresAt: Date | string | null;
 };
 
 async function exchangeCodeForTokens(params: {
@@ -229,6 +238,35 @@ async function exchangeCodeForTokens(params: {
 	if (!res.ok) {
 		const text = await res.text();
 		throw error(500, `Token exchange failed: ${res.status} ${text}`);
+	}
+
+	return res.json() as Promise<TokenResponse>;
+}
+
+async function refreshTokens(refreshToken: string): Promise<TokenResponse> {
+	const clientId = requireEnv('ENTRA_CLIENT_ID');
+	const { token_endpoint } = await getDiscovery();
+
+	const clientAssertion = await createClientAssertion(token_endpoint);
+
+	const body = new URLSearchParams({
+		grant_type: 'refresh_token',
+		client_id: clientId,
+		refresh_token: refreshToken,
+		scope: 'openid profile email offline_access User.ReadBasic.All',
+		client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
+		client_assertion: clientAssertion
+	});
+
+	const res = await fetch(token_endpoint, {
+		method: 'POST',
+		headers: { 'content-type': 'application/x-www-form-urlencoded' },
+		body
+	});
+
+	if (!res.ok) {
+		const text = await res.text();
+		throw error(401, `Token refresh failed: ${res.status} ${text}`);
 	}
 
 	return res.json() as Promise<TokenResponse>;
@@ -286,6 +324,27 @@ async function ensureUsersTableExtensions() {
 		BEGIN
 			ALTER TABLE dbo.Users ADD DefaultScheduleId int NULL;
 		END
+		IF COL_LENGTH('dbo.Users', 'ScheduleUiStateJson') IS NULL
+		BEGIN
+			ALTER TABLE dbo.Users ADD ScheduleUiStateJson nvarchar(max) NULL;
+		END
+		IF COL_LENGTH('dbo.Users', 'ScheduleUiStateJson') IS NOT NULL
+		BEGIN
+			EXEC(N'
+				UPDATE dbo.Users
+				   SET ScheduleUiStateJson = NULL
+				 WHERE ScheduleUiStateJson IS NOT NULL
+				   AND ISJSON(ScheduleUiStateJson) <> 1;
+			');
+		END
+		IF OBJECT_ID('dbo.CK_Users_ScheduleUiStateJson_IsJson', 'C') IS NULL
+		BEGIN
+			EXEC(N'
+				ALTER TABLE dbo.Users
+				ADD CONSTRAINT CK_Users_ScheduleUiStateJson_IsJson
+				CHECK (ScheduleUiStateJson IS NULL OR ISJSON(ScheduleUiStateJson) = 1);
+			');
+		END
 		IF NOT EXISTS (
 			SELECT 1
 			FROM sys.foreign_keys
@@ -318,7 +377,54 @@ async function cleanupSessions() {
 	const pool = await GetPool();
 	await pool
 		.request()
-	.query('DELETE FROM dbo.UserSessions WHERE ExpiresAt < SYSUTCDATETIME();');
+		.query(
+			'DELETE FROM dbo.UserSessions WHERE ExpiresAt < DATEADD(day, -30, SYSUTCDATETIME());'
+		);
+}
+
+function isExpired(expiresAt: Date | string | null): boolean {
+	if (!expiresAt) return true;
+	const parsed = new Date(expiresAt).getTime();
+	if (Number.isNaN(parsed)) return true;
+	return parsed < Date.now();
+}
+
+async function refreshSessionIfExpired(
+	pool: Awaited<ReturnType<typeof GetPool>>,
+	sessionId: string,
+	row: SessionRow
+): Promise<SessionRow | null> {
+	if (!isExpired(row.ExpiresAt)) return row;
+	if (!row.RefreshToken) return null;
+
+	const refreshed = await refreshTokens(row.RefreshToken);
+	if (!refreshed.access_token || !Number.isFinite(refreshed.expires_in) || refreshed.expires_in <= 0) {
+		return null;
+	}
+
+	const nextRefreshToken = refreshed.refresh_token ?? row.RefreshToken;
+	const nextExpiresAt = new Date(Date.now() + refreshed.expires_in * 1000);
+
+	await pool
+		.request()
+		.input('sessionId', sessionId)
+		.input('accessToken', refreshed.access_token)
+		.input('refreshToken', nextRefreshToken)
+		.input('expiresAt', nextExpiresAt)
+		.query(
+			`UPDATE dbo.UserSessions
+			 SET AccessToken = @accessToken,
+				 RefreshToken = @refreshToken,
+				 ExpiresAt = @expiresAt
+			 WHERE SessionId = @sessionId;`
+		);
+
+	return {
+		...row,
+		AccessToken: refreshed.access_token,
+		RefreshToken: nextRefreshToken,
+		ExpiresAt: nextExpiresAt
+	};
 }
 
 async function upsertUserProfile(user: Session['user']) {
@@ -438,6 +544,9 @@ export async function finishLogin(event: RequestEvent): Promise<Session | null> 
 		codeVerifier,
 		redirectUri
 	});
+	if (!tokens.id_token) {
+		throw error(500, 'Missing id_token in token response');
+	}
 
 	const claims = await verifyIdToken({ idToken: tokens.id_token, nonce: savedNonce });
 
@@ -479,19 +588,19 @@ export async function readSession(event: RequestEvent): Promise<Session | null> 
 
 	try {
 		await ensureSessionTable();
-		await cleanupSessions();
 		const pool = await GetPool();
 		const result = await pool
 			.request()
 			.input('sessionId', token)
 			.query(
-				`SELECT TOP (1) UserOid, Email, Name, ExpiresAt
+				`SELECT TOP (1) UserOid, Email, Name, AccessToken, RefreshToken, ExpiresAt
 				 FROM dbo.UserSessions
 				 WHERE SessionId = @sessionId;`
 			);
-		const row = result.recordset[0];
-		if (!row) return null;
-		if (row.ExpiresAt && new Date(row.ExpiresAt).getTime() < Date.now()) {
+		const sessionRow = result.recordset[0] as SessionRow | undefined;
+		if (!sessionRow) return null;
+		const row = await refreshSessionIfExpired(pool, token, sessionRow);
+		if (!row) {
 			return null;
 		}
 		const session = {
@@ -503,6 +612,7 @@ export async function readSession(event: RequestEvent): Promise<Session | null> 
 		};
 		await upsertUserProfile(session.user);
 		await ensureBootstrapManager(session.user);
+		await cleanupSessions();
 		return session;
 	} catch {
 		return null;
@@ -520,17 +630,19 @@ export async function getSessionAccessToken(event: RequestEvent): Promise<string
 		.request()
 		.input('sessionId', token)
 		.query(
-			`SELECT TOP (1) AccessToken, ExpiresAt
+			`SELECT TOP (1) UserOid, Email, Name, AccessToken, RefreshToken, ExpiresAt
 			 FROM dbo.UserSessions
 			 WHERE SessionId = @sessionId;`
 		);
-	const row = result.recordset[0];
-	if (!row) {
+	const sessionRow = result.recordset[0] as SessionRow | undefined;
+	if (!sessionRow) {
 		throw error(401, 'Invalid session');
 	}
-	if (row.ExpiresAt && new Date(row.ExpiresAt).getTime() < Date.now()) {
+	const row = await refreshSessionIfExpired(pool, token, sessionRow);
+	if (!row) {
 		throw error(401, 'Session expired');
 	}
+	await cleanupSessions();
 	return row.AccessToken;
 }
 

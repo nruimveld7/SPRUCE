@@ -1,7 +1,7 @@
 .teamSetupBackdrop {
   position: fixed;
   inset: 0;
-  z-index: 90;
+  z-index: 480;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -66,6 +66,7 @@
   gap: 8px;
   padding: 14px;
   border-right: 1px solid var(--grid-2);
+  align-items: stretch;
 }
 
 .teamSetupNavBtn {
@@ -74,7 +75,7 @@
   border-radius: 12px;
   background: transparent;
   color: var(--text);
-  text-align: left;
+  text-align: center;
   padding: 10px 12px;
   font-weight: 850;
   cursor: pointer;
@@ -96,7 +97,6 @@
   align-items: center;
   justify-content: center;
   width: 100%;
-  height: 42px;
   margin-top: 4px;
   border: 1px dashed var(--interactive-border-hover);
   border-radius: 12px;
@@ -338,7 +338,7 @@
 .numberStepperGlyph {
   font-size: 9px;
   opacity: 0.88;
-  transform: translateY(-.5px);
+  transform: translateY(-0.5px);
   pointer-events: none;
 }
 
@@ -471,7 +471,8 @@ button.setupUserComboItem:hover {
 }
 
 .setupTable {
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
   margin-top: 10px;
 }
@@ -489,6 +490,49 @@ button.setupUserComboItem:hover {
   font-size: 12px;
   letter-spacing: 0.02em;
   color: var(--muted);
+}
+
+.rowChevronBtn {
+  appearance: none;
+  border: 1px solid var(--interactive-border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  min-width: 56px;
+  height: 28px;
+  padding: 0 10px;
+  line-height: 1;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.rowChevronBtn:hover {
+  background: var(--interactive-bg-hover);
+  border-color: var(--interactive-border-hover);
+}
+
+.setupDetailsRow td {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.setupSubTable {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+}
+
+.setupSubTable th,
+.setupSubTable td {
+  text-align: center;
+  border-bottom: 1px solid var(--grid-2);
+  padding: 8px 6px;
+}
+
+.setupSubTable th {
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
 }
 
 .tableSortBtn {
@@ -1179,10 +1223,14 @@ button.setupUserComboItem:hover {
 }
 
 .managerCreateScheduleBtn {
-  grid-column: 1 / -1;
-  width: 100%;
+  align-self: end;
+  width: auto;
   padding: 6px 10px;
   min-height: 34px;
+  color: #ffffff;
+  border-width: 1px;
+  border-style: solid;
+  box-shadow: none;
 }
 
 .managerStatusMessage {
@@ -1303,7 +1351,7 @@ button.setupUserComboItem:hover {
 }
 
 .actionBtn {
-  width: 110px;
+  width: 95px;
   justify-content: center;
 }
 

@@ -66,6 +66,11 @@ function toDateOnly(value: Date | string | null): string | null {
 	return null;
 }
 
+function minusOneDay(dateOnly: string): string {
+	const utcDate = new Date(`${dateOnly}T00:00:00Z`);
+	return toDateOnly(new Date(utcDate.getTime() - 24 * 60 * 60 * 1000)) ?? dateOnly;
+}
+
 function cleanAsOfDate(value: string | null): string | null {
 	if (!value) return null;
 	return cleanDateOnly(value, 'asOf');
@@ -109,10 +114,8 @@ async function getActorContext(localsUserOid: string, cookies: Cookies) {
 }
 
 async function normalizeAssignmentOrder(tx: sql.Transaction, scheduleId: number) {
-	await new sql.Request(tx)
-		.input('scheduleId', scheduleId)
-		.query(
-			`WITH Ordered AS (
+	await new sql.Request(tx).input('scheduleId', scheduleId).query(
+		`WITH Ordered AS (
 				SELECT
 					ScheduleId,
 					EmployeeTypeId,
@@ -139,7 +142,7 @@ async function normalizeAssignmentOrder(tx: sql.Transaction, scheduleId: number)
 			  AND sut.IsActive = 1
 			  AND sut.DeletedAt IS NULL
 			  AND sut.DisplayOrder <> o.NextDisplayOrder;`
-		);
+	);
 }
 
 async function ensureAssignmentReferencesValid(
@@ -360,7 +363,79 @@ export const GET: RequestHandler = async ({ locals, cookies, url }) => {
 		};
 	});
 
-	return json({ assignments });
+	const historyResult = await pool
+		.request()
+		.input('scheduleId', scheduleId)
+		.query(
+			`SELECT
+			sut.DisplayOrder,
+			sut.UserOid,
+			sut.EmployeeTypeId,
+			sut.StartDate,
+			sut.EndDate,
+			COALESCE(NULLIF(u.DisplayName, ''), NULLIF(u.FullName, ''), sut.UserOid) AS UserName,
+			et.Name AS ShiftName
+		 FROM dbo.ScheduleUserTypes sut
+		 LEFT JOIN dbo.Users u
+			ON u.UserOid = sut.UserOid
+		   AND u.DeletedAt IS NULL
+		 LEFT JOIN dbo.EmployeeTypes et
+			ON et.ScheduleId = sut.ScheduleId
+		   AND et.EmployeeTypeId = sut.EmployeeTypeId
+		   AND et.IsActive = 1
+		   AND et.DeletedAt IS NULL
+		 WHERE sut.ScheduleId = @scheduleId
+		   AND sut.IsActive = 1
+		   AND sut.DeletedAt IS NULL
+		 ORDER BY sut.UserOid ASC, sut.StartDate ASC;`
+		);
+	const historyByUser = new Map<
+		string,
+		Array<{
+			assignmentId: string;
+			sortOrder: number;
+			userOid: string;
+			shiftEmployeeTypeId: number;
+			startDate: string;
+			endDate: string | null;
+			userName: string;
+			shiftName: string;
+		}>
+	>();
+	for (const row of historyResult.recordset as AssignmentRow[]) {
+		const startDate = toDateOnly(row.StartDate) ?? '';
+		const assignmentId = `${row.UserOid}|${row.EmployeeTypeId}|${startDate}`;
+		const existing = historyByUser.get(row.UserOid) ?? [];
+		existing.push({
+			assignmentId,
+			sortOrder: Number(row.DisplayOrder),
+			userOid: row.UserOid,
+			shiftEmployeeTypeId: Number(row.EmployeeTypeId),
+			startDate,
+			endDate: toDateOnly(row.EndDate),
+			userName: row.UserName?.trim() || row.UserOid,
+			shiftName: row.ShiftName?.trim() || 'Unknown shift'
+		});
+		historyByUser.set(row.UserOid, existing);
+	}
+
+	const assignmentsWithHistory = assignments.map((assignment) => ({
+		...assignment,
+		changes: historyByUser.get(assignment.userOid) ?? [
+			{
+				assignmentId: assignment.assignmentId,
+				sortOrder: assignment.sortOrder,
+				userOid: assignment.userOid,
+				shiftEmployeeTypeId: assignment.shiftEmployeeTypeId,
+				startDate: assignment.startDate,
+				endDate: assignment.endDate ?? null,
+				userName: assignment.userName,
+				shiftName: assignment.shiftName
+			}
+		]
+	}));
+
+	return json({ assignments: assignmentsWithHistory });
 };
 
 async function upsertAssignment({
@@ -379,10 +454,21 @@ async function upsertAssignment({
 
 	const { pool, scheduleId, actorOid } = await getActorContext(currentUser.id, cookies);
 	const body = await request.json().catch(() => null);
+	const mode =
+		typeof body?.editMode === 'string' && body.editMode.trim().toLowerCase() === 'history'
+			? 'history'
+			: 'create_or_effective';
 
 	const userOid = cleanRequiredText(body?.userOid, 64, 'User');
 	const employeeTypeId = cleanRequiredInt(body?.shiftEmployeeTypeId, 'Shift');
 	const startDate = cleanDateOnly(body?.startDate, 'Effective start date');
+	const historyStartDate =
+		mode === 'history'
+			? cleanDateOnly(
+					body?.changeStartDate ?? body?.historyStartDate ?? body?.startDate,
+					'Change start date'
+				)
+			: null;
 	const requestedSortOrder = cleanOptionalSortOrder(body?.sortOrder ?? body?.displayOrder);
 
 	const tx = new sql.Transaction(pool);
@@ -391,11 +477,242 @@ async function upsertAssignment({
 		await ensureAssignmentReferencesValid(tx, scheduleId, userOid, employeeTypeId);
 		await normalizeAssignmentOrder(tx, scheduleId);
 
+		if (mode === 'history') {
+			if (!historyStartDate) {
+				throw error(400, 'Change start date is required for history edits');
+			}
+
+			const existingRowResult = await new sql.Request(tx)
+				.input('scheduleId', scheduleId)
+				.input('userOid', userOid)
+				.input('historyStartDate', historyStartDate)
+				.query(
+					`SELECT TOP (1) EmployeeTypeId, DisplayOrder
+						 FROM dbo.ScheduleUserTypes
+						 WHERE ScheduleId = @scheduleId
+						   AND UserOid = @userOid
+						   AND StartDate = @historyStartDate
+						   AND IsActive = 1
+						   AND DeletedAt IS NULL;`
+				);
+			const existingRow = existingRowResult.recordset?.[0];
+			if (!existingRow) {
+				throw error(404, 'Assignment change entry not found');
+			}
+
+			const currentEmployeeTypeId = Number(existingRow.EmployeeTypeId ?? 0);
+			const currentSortOrder = Number(existingRow.DisplayOrder ?? 0);
+			if (!currentEmployeeTypeId || !currentSortOrder) {
+				throw error(404, 'Assignment change entry not found');
+			}
+
+			const timelineContext = await new sql.Request(tx)
+				.input('scheduleId', scheduleId)
+				.input('userOid', userOid)
+				.input('historyStartDate', historyStartDate)
+				.input('targetStartDate', startDate)
+				.query(
+					`SELECT
+						(SELECT TOP (1) StartDate
+						 FROM dbo.ScheduleUserTypes
+						 WHERE ScheduleId = @scheduleId
+						   AND UserOid = @userOid
+						   AND IsActive = 1
+						   AND DeletedAt IS NULL
+						   AND StartDate < @historyStartDate
+						 ORDER BY StartDate DESC) AS PreviousStartDate,
+						(SELECT TOP (1) StartDate
+						 FROM dbo.ScheduleUserTypes
+						 WHERE ScheduleId = @scheduleId
+						   AND UserOid = @userOid
+						   AND IsActive = 1
+						   AND DeletedAt IS NULL
+						   AND StartDate > @historyStartDate
+						 ORDER BY StartDate ASC) AS NextStartDate,
+						(SELECT TOP (1) StartDate
+						 FROM dbo.ScheduleUserTypes
+						 WHERE ScheduleId = @scheduleId
+						   AND UserOid = @userOid
+						   AND IsActive = 1
+						   AND DeletedAt IS NULL
+						   AND StartDate = @targetStartDate
+						   AND StartDate <> @historyStartDate) AS ConflictingStartDate;`
+				);
+			const previousStartDate = toDateOnly(
+				timelineContext.recordset?.[0]?.PreviousStartDate ?? null
+			);
+			const nextStartDate = toDateOnly(timelineContext.recordset?.[0]?.NextStartDate ?? null);
+			const conflictingStartDate = toDateOnly(
+				timelineContext.recordset?.[0]?.ConflictingStartDate ?? null
+			);
+
+			if (conflictingStartDate) {
+				throw error(400, 'An assignment change already exists with that effective start date');
+			}
+			if (previousStartDate && startDate <= previousStartDate) {
+				throw error(400, 'Change effective date must be after the previous assignment change');
+			}
+			if (nextStartDate && startDate >= nextStartDate) {
+				throw error(400, 'Change effective date must be before the next assignment change');
+			}
+
+			const previousEndDate = previousStartDate ? minusOneDay(startDate) : null;
+			const currentEndDate = nextStartDate ? minusOneDay(nextStartDate) : null;
+
+			const targetCountResult = await new sql.Request(tx)
+				.input('scheduleId', scheduleId)
+				.input('employeeTypeId', employeeTypeId)
+				.input('userOid', userOid)
+				.input('historyStartDate', historyStartDate)
+				.query(
+					`SELECT COUNT(*) AS AssignmentCount
+						 FROM dbo.ScheduleUserTypes
+						 WHERE ScheduleId = @scheduleId
+						   AND EmployeeTypeId = @employeeTypeId
+						   AND IsActive = 1
+						   AND DeletedAt IS NULL
+						   AND NOT (UserOid = @userOid AND StartDate = @historyStartDate);`
+				);
+			const targetCount = Number(targetCountResult.recordset?.[0]?.AssignmentCount ?? 0);
+			const maxSortOrder = Math.max(targetCount + 1, 1);
+			const targetSortOrder = requestedSortOrder ?? currentSortOrder;
+			if (targetSortOrder < 1 || targetSortOrder > maxSortOrder) {
+				throw error(400, `Sort order must be between 1 and ${maxSortOrder}`);
+			}
+
+			if (employeeTypeId === currentEmployeeTypeId) {
+				if (targetSortOrder < currentSortOrder) {
+					await new sql.Request(tx)
+						.input('scheduleId', scheduleId)
+						.input('employeeTypeId', employeeTypeId)
+						.input('userOid', userOid)
+						.input('historyStartDate', historyStartDate)
+						.input('targetSortOrder', targetSortOrder)
+						.input('currentSortOrder', currentSortOrder)
+						.query(
+							`UPDATE dbo.ScheduleUserTypes
+								 SET DisplayOrder = DisplayOrder + 1
+								 WHERE ScheduleId = @scheduleId
+								   AND EmployeeTypeId = @employeeTypeId
+								   AND IsActive = 1
+								   AND DeletedAt IS NULL
+								   AND DisplayOrder >= @targetSortOrder
+								   AND DisplayOrder < @currentSortOrder
+								   AND NOT (UserOid = @userOid AND StartDate = @historyStartDate);`
+						);
+				} else if (targetSortOrder > currentSortOrder) {
+					await new sql.Request(tx)
+						.input('scheduleId', scheduleId)
+						.input('employeeTypeId', employeeTypeId)
+						.input('userOid', userOid)
+						.input('historyStartDate', historyStartDate)
+						.input('targetSortOrder', targetSortOrder)
+						.input('currentSortOrder', currentSortOrder)
+						.query(
+							`UPDATE dbo.ScheduleUserTypes
+								 SET DisplayOrder = DisplayOrder - 1
+								 WHERE ScheduleId = @scheduleId
+								   AND EmployeeTypeId = @employeeTypeId
+								   AND IsActive = 1
+								   AND DeletedAt IS NULL
+								   AND DisplayOrder > @currentSortOrder
+								   AND DisplayOrder <= @targetSortOrder
+								   AND NOT (UserOid = @userOid AND StartDate = @historyStartDate);`
+						);
+				}
+			} else {
+				await new sql.Request(tx)
+					.input('scheduleId', scheduleId)
+					.input('employeeTypeId', currentEmployeeTypeId)
+					.input('currentSortOrder', currentSortOrder)
+					.query(
+						`UPDATE dbo.ScheduleUserTypes
+							 SET DisplayOrder = DisplayOrder - 1
+							 WHERE ScheduleId = @scheduleId
+							   AND EmployeeTypeId = @employeeTypeId
+							   AND IsActive = 1
+							   AND DeletedAt IS NULL
+							   AND DisplayOrder > @currentSortOrder;`
+					);
+
+				await new sql.Request(tx)
+					.input('scheduleId', scheduleId)
+					.input('employeeTypeId', employeeTypeId)
+					.input('targetSortOrder', targetSortOrder)
+					.query(
+						`UPDATE dbo.ScheduleUserTypes
+							 SET DisplayOrder = DisplayOrder + 1
+							 WHERE ScheduleId = @scheduleId
+							   AND EmployeeTypeId = @employeeTypeId
+							   AND IsActive = 1
+							   AND DeletedAt IS NULL
+							   AND DisplayOrder >= @targetSortOrder;`
+					);
+			}
+
+				const updatePreviousWindow = async () => {
+					if (!previousStartDate) return;
+					await new sql.Request(tx)
+						.input('scheduleId', scheduleId)
+						.input('userOid', userOid)
+						.input('previousStartDate', previousStartDate)
+						.input('previousEndDate', previousEndDate)
+						.input('actorOid', actorOid)
+						.query(
+							`UPDATE dbo.ScheduleUserTypes
+							 SET EndDate = @previousEndDate,
+								 EndedAt = CASE WHEN @previousEndDate IS NULL THEN NULL ELSE SYSUTCDATETIME() END,
+								 EndedBy = CASE WHEN @previousEndDate IS NULL THEN NULL ELSE @actorOid END
+							 WHERE ScheduleId = @scheduleId
+							   AND UserOid = @userOid
+							   AND StartDate = @previousStartDate
+							   AND IsActive = 1
+							   AND DeletedAt IS NULL;`
+						);
+				};
+
+				const updateCurrentWindow = async () => {
+					await new sql.Request(tx)
+						.input('scheduleId', scheduleId)
+						.input('userOid', userOid)
+						.input('historyStartDate', historyStartDate)
+						.input('targetStartDate', startDate)
+						.input('employeeTypeId', employeeTypeId)
+						.input('sortOrder', targetSortOrder)
+						.input('currentEndDate', currentEndDate)
+						.input('actorOid', actorOid)
+						.query(
+							`UPDATE dbo.ScheduleUserTypes
+								 SET StartDate = @targetStartDate,
+									 EndDate = @currentEndDate,
+									 EmployeeTypeId = @employeeTypeId,
+									 DisplayOrder = @sortOrder,
+									 EndedAt = CASE WHEN @currentEndDate IS NULL THEN NULL ELSE SYSUTCDATETIME() END,
+									 EndedBy = CASE WHEN @currentEndDate IS NULL THEN NULL ELSE @actorOid END
+								 WHERE ScheduleId = @scheduleId
+								   AND UserOid = @userOid
+								   AND StartDate = @historyStartDate
+								   AND IsActive = 1
+								   AND DeletedAt IS NULL;`
+						);
+				};
+
+				if (startDate > historyStartDate) {
+					await updateCurrentWindow();
+					await updatePreviousWindow();
+				} else {
+					await updatePreviousWindow();
+					await updateCurrentWindow();
+				}
+			await tx.commit();
+			return json({ success: true });
+		}
+
 		const countResult = await new sql.Request(tx)
 			.input('scheduleId', scheduleId)
 			.input('employeeTypeId', employeeTypeId)
 			.query(
-			`SELECT COUNT(*) AS AssignmentCount
+				`SELECT COUNT(*) AS AssignmentCount
 			 FROM dbo.ScheduleUserTypes
 			 WHERE ScheduleId = @scheduleId
 			   AND EmployeeTypeId = @employeeTypeId
@@ -435,7 +752,11 @@ async function upsertAssignment({
 
 		await tx.commit();
 	} catch (e) {
-		await tx.rollback();
+		try {
+			await tx.rollback();
+		} catch {
+			// Preserve the original SQL error when SQL Server already aborted the transaction.
+		}
 		throw e;
 	}
 
@@ -447,3 +768,123 @@ export const POST: RequestHandler = async ({ locals, cookies, request }) =>
 
 export const PATCH: RequestHandler = async ({ locals, cookies, request }) =>
 	upsertAssignment({ locals, cookies, request });
+
+type RemoveAssignmentPayload = {
+	userOid?: unknown;
+	editMode?: unknown;
+	changeStartDate?: unknown;
+};
+
+export const DELETE: RequestHandler = async ({ locals, cookies, request }) => {
+	const currentUser = locals.user;
+	if (!currentUser) {
+		throw error(401, 'Unauthorized');
+	}
+
+	const { pool, scheduleId, actorOid } = await getActorContext(currentUser.id, cookies);
+	const body = (await request.json().catch(() => null)) as RemoveAssignmentPayload | null;
+	const userOid = cleanRequiredText(body?.userOid, 64, 'User');
+	const editMode =
+		typeof body?.editMode === 'string' && body.editMode.trim().toLowerCase() === 'history'
+			? 'history'
+			: 'timeline';
+	const changeStartDate =
+		editMode === 'history' && typeof body?.changeStartDate === 'string'
+			? cleanDateOnly(body.changeStartDate, 'Change start date')
+			: null;
+
+	const tx = new sql.Transaction(pool);
+	await tx.begin();
+	try {
+		if (editMode === 'history') {
+			if (!changeStartDate) {
+				throw error(400, 'Change start date is required for history edits');
+			}
+
+			const rowResult = await new sql.Request(tx)
+				.input('scheduleId', scheduleId)
+				.input('userOid', userOid)
+				.input('changeStartDate', changeStartDate)
+				.query(
+					`SELECT TOP (1) EmployeeTypeId
+					 FROM dbo.ScheduleUserTypes
+					 WHERE ScheduleId = @scheduleId
+					   AND UserOid = @userOid
+					   AND StartDate = @changeStartDate
+					   AND IsActive = 1
+					   AND DeletedAt IS NULL;`
+				);
+			const currentEmployeeTypeId = Number(rowResult.recordset?.[0]?.EmployeeTypeId ?? 0);
+			if (!currentEmployeeTypeId) {
+				throw error(404, 'Assignment change entry not found');
+			}
+
+			await new sql.Request(tx)
+				.input('scheduleId', scheduleId)
+				.input('userOid', userOid)
+				.input('changeStartDate', changeStartDate)
+				.query(
+					`DELETE FROM dbo.ScheduleUserTypes
+					 WHERE ScheduleId = @scheduleId
+					   AND UserOid = @userOid
+					   AND StartDate = @changeStartDate
+					   AND IsActive = 1
+					   AND DeletedAt IS NULL;`
+				);
+
+			await normalizeAssignmentOrder(tx, scheduleId);
+			await tx.commit();
+			return json({ success: true, removalMode: 'history_removed' });
+		}
+
+		const serverDateResult = await new sql.Request(tx).query(
+			`SELECT CONVERT(date, SYSUTCDATETIME()) AS Today;`
+		);
+		const today = String(serverDateResult.recordset?.[0]?.Today ?? '').slice(0, 10);
+		if (!today) {
+			throw error(500, 'Could not resolve current server date');
+		}
+
+		await new sql.Request(tx)
+			.input('scheduleId', scheduleId)
+			.input('userOid', userOid)
+			.input('today', today)
+			.input('actorOid', actorOid)
+			.query(
+				`UPDATE dbo.ScheduleUserTypes
+				 SET EndDate = CASE
+					 WHEN EndDate IS NULL OR EndDate > @today THEN @today
+					 ELSE EndDate
+				 END,
+				 EndedAt = SYSUTCDATETIME(),
+				 EndedBy = @actorOid
+				 WHERE ScheduleId = @scheduleId
+				   AND UserOid = @userOid
+				   AND IsActive = 1
+				   AND DeletedAt IS NULL
+				   AND StartDate <= @today
+				   AND (EndDate IS NULL OR EndDate >= @today);
+
+				 UPDATE dbo.ScheduleUserTypes
+				 SET IsActive = 0,
+					 DeletedAt = SYSUTCDATETIME(),
+					 DeletedBy = @actorOid
+				 WHERE ScheduleId = @scheduleId
+				   AND UserOid = @userOid
+				   AND IsActive = 1
+				   AND DeletedAt IS NULL
+				   AND StartDate > @today;`
+			);
+
+		await normalizeAssignmentOrder(tx, scheduleId);
+		await tx.commit();
+		return json({ success: true, removalMode: 'timeline_removed' });
+	} catch (e) {
+		try {
+			await tx.rollback();
+		} catch {
+			// Preserve the original SQL error when SQL Server already aborted the transaction.
+		}
+		throw e;
+	}
+};

@@ -2,6 +2,7 @@ import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { GetPool } from '$lib/server/db';
 import { setActiveScheduleForSession } from '$lib/server/auth';
+import { getDefaultScheduleThemeJson } from '$lib/server/schedule-theme';
 
 function parseScheduleName(value: unknown): string {
 	if (typeof value !== 'string') {
@@ -22,6 +23,7 @@ export const POST: RequestHandler = async ({ locals, cookies, request }) => {
 
 	const body = await request.json().catch(() => null);
 	const scheduleName = parseScheduleName(body?.scheduleName);
+	const themeJson = getDefaultScheduleThemeJson();
 	const pool = await GetPool();
 
 	const managerAccessResult = await pool.request().input('userOid', user.id).query(
@@ -45,9 +47,11 @@ export const POST: RequestHandler = async ({ locals, cookies, request }) => {
 	const createResult = await pool
 		.request()
 		.input('scheduleName', scheduleName)
+		.input('themeJson', themeJson)
 		.input('userOid', user.id)
 		.query(
-			`DECLARE @ScheduleId int;
+			`DECLARE @CreatedSchedule TABLE (ScheduleId int NOT NULL);
+			 DECLARE @ScheduleId int;
 			 DECLARE @ManagerRoleId int;
 
 			 SELECT TOP (1) @ManagerRoleId = RoleId
@@ -57,10 +61,15 @@ export const POST: RequestHandler = async ({ locals, cookies, request }) => {
 			 IF @ManagerRoleId IS NULL
 				 THROW 50000, 'Manager role not found', 1;
 
-			 INSERT INTO dbo.Schedules (Name, CreatedBy)
-			 VALUES (@scheduleName, @userOid);
+			 INSERT INTO dbo.Schedules (Name, ThemeJson, CreatedBy)
+			 OUTPUT INSERTED.ScheduleId INTO @CreatedSchedule(ScheduleId)
+			 VALUES (@scheduleName, @themeJson, @userOid);
 
-			 SET @ScheduleId = SCOPE_IDENTITY();
+			 SELECT TOP (1) @ScheduleId = ScheduleId
+			 FROM @CreatedSchedule;
+
+			 IF @ScheduleId IS NULL
+				 THROW 50000, 'Failed to capture ScheduleId for new schedule', 1;
 
 			 INSERT INTO dbo.ScheduleUsers (ScheduleId, UserOid, RoleId, GrantedBy)
 			 VALUES (@ScheduleId, @userOid, @ManagerRoleId, @userOid);

@@ -1,6 +1,11 @@
 import type { PageServerLoad } from './$types';
 import { GetPool } from '$lib/server/db';
 import { getActiveScheduleId, setActiveScheduleForSession } from '$lib/server/auth';
+import {
+	parseCollapsedGroupsBySchedule,
+	parseThemePreference,
+	type ThemePreference
+} from '$lib/server/schedule-ui-state';
 
 type ScheduleRole = 'Member' | 'Maintainer' | 'Manager';
 type ScheduleMembership = {
@@ -19,22 +24,31 @@ export const load: PageServerLoad = async ({ locals, cookies }) => {
 			schedule: null,
 			userRole: null,
 			scheduleMemberships: [] as ScheduleMembership[],
-			currentUserOid: null
+			currentUserOid: null,
+			collapsedGroupsBySchedule: {},
+			themePreference: 'system' as ThemePreference
 		};
 	}
 
 	let scheduleId = await getActiveScheduleId(cookies);
 	const pool = await GetPool();
-	const defaultResult = await pool
+	const userSettingsResult = await pool
 		.request()
 		.input('userOid', user.id)
 		.query(
-			`SELECT TOP (1) DefaultScheduleId
+			`SELECT TOP (1) DefaultScheduleId, ScheduleUiStateJson
 			 FROM dbo.Users
 			 WHERE UserOid = @userOid
 			   AND DeletedAt IS NULL;`
 		);
-	const defaultScheduleId = (defaultResult.recordset?.[0]?.DefaultScheduleId as number | null) ?? null;
+	const defaultScheduleId =
+		(userSettingsResult.recordset?.[0]?.DefaultScheduleId as number | null) ?? null;
+	const collapsedGroupsBySchedule = parseCollapsedGroupsBySchedule(
+		(userSettingsResult.recordset?.[0]?.ScheduleUiStateJson as string | null) ?? null
+	);
+	const themePreference = parseThemePreference(
+		(userSettingsResult.recordset?.[0]?.ScheduleUiStateJson as string | null) ?? null
+	);
 
 	const membershipsResult = await pool
 		.request()
@@ -95,7 +109,9 @@ export const load: PageServerLoad = async ({ locals, cookies }) => {
 			schedule: null,
 			userRole: null,
 			scheduleMemberships,
-			currentUserOid: user.id
+			currentUserOid: user.id,
+			collapsedGroupsBySchedule,
+			themePreference
 		};
 	}
 	const activeMembership = scheduleMemberships.find((membership) => membership.ScheduleId === scheduleId);
@@ -104,6 +120,8 @@ export const load: PageServerLoad = async ({ locals, cookies }) => {
 		schedule: activeMembership ? { ScheduleId: activeMembership.ScheduleId, Name: activeMembership.Name } : null,
 		userRole: activeMembership?.RoleName ?? null,
 		scheduleMemberships,
-		currentUserOid: user.id
+		currentUserOid: user.id,
+		collapsedGroupsBySchedule,
+		themePreference
 	};
 };

@@ -1,6 +1,8 @@
 .gridwrapShell {
+  --schedule-row-min-height: 25px;
+  --schedule-row-max-height: 44px;
+  --schedule-header-row-height: 44px;
   position: relative;
-  z-index: 1;
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
@@ -18,11 +20,9 @@
   min-height: 0;
   scrollbar-width: none;
   -ms-overflow-style: none;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, .06), rgba(0, 0, 0, .14));
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(0, 0, 0, 0.14));
   background-repeat: no-repeat;
   background-size: 100% 100%;
-
 }
 
 .gridwrap::-webkit-scrollbar {
@@ -32,7 +32,7 @@
 
 .gridScrollRailHorizontal {
   position: absolute;
-  left: 12px;
+  left: calc(12px + var(--team-col-width, clamp(220px, 20vw, 360px)) + var(--team-toggle-col-width, 0px));
   right: 12px;
   bottom: 5px;
   height: var(--scrollbar-size);
@@ -62,9 +62,83 @@
   cursor: grabbing;
 }
 
+.gridScrollRailVertical {
+  position: absolute;
+  top: calc(8px + var(--schedule-header-row-height, 44px));
+  right: 5px;
+  bottom: calc(8px + var(--scrollbar-size) + 5px);
+  width: var(--scrollbar-size);
+  z-index: 25;
+  border-radius: var(--scrollbar-radius);
+  background: var(--scrollbar-track-bg);
+}
+
+.gridScrollThumbVertical {
+  width: 100%;
+  z-index: 26;
+  border-radius: var(--scrollbar-radius);
+  background: var(--scrollbar-thumb-bg);
+  border: var(--scrollbar-thumb-border);
+  cursor: grab;
+}
+
+.gridScrollThumbVertical:hover {
+  background: var(--scrollbar-thumb-bg-hover);
+}
+
+.gridScrollThumbVertical.dragging {
+  background: var(--scrollbar-thumb-bg-hover);
+}
+
+.gridScrollThumbVertical:active {
+  cursor: grabbing;
+}
+
 .memberEventsModal {
-  width: min(540px, calc(100vw - 32px));
+  width: min(700px, calc(100vw - 32px));
+  max-height: min(760px, calc(100vh - 40px));
+  position: relative;
   gap: 12px;
+  overflow: hidden;
+}
+
+.memberEventsHoverTooltip {
+  position: fixed;
+  z-index: 500;
+  width: min(460px, calc(100vw - 24px));
+  max-height: min(62vh, 520px);
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--modal-border);
+  border-radius: 12px;
+  background: var(--modal-surface);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  pointer-events: none;
+}
+
+.memberEventsHoverTooltipTitle {
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  margin: 0 0 8px;
+}
+
+.memberEventsModalScroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.memberEventsModalScroll.hasScrollbar {
+  padding-right: calc(8px + var(--scrollbar-size) + 2px);
+}
+
+.memberEventsModalScroll::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .memberEventsRows {
@@ -133,6 +207,7 @@
   gap: 7px;
   font-size: 12px;
   line-height: 1.2;
+  justify-content: center;
 }
 
 .memberEventColorDot {
@@ -208,6 +283,10 @@
   width: 100%;
 }
 
+.memberEventsModal .datePickerMenu {
+  min-width: max(100%, 312px);
+}
+
 .memberEventPickerWrap :global(.pickerBtnValue) {
   flex: 1 1 auto;
 }
@@ -245,7 +324,7 @@
   font-weight: 850;
   color: var(--muted);
   text-transform: uppercase;
-  letter-spacing: .02em;
+  letter-spacing: 0.02em;
 }
 
 .memberEventCustomFields {
@@ -272,10 +351,7 @@
   display: grid;
   min-width: 1100px;
   position: relative;
-  --schedule-row-min-height: 32px;
-  --schedule-row-max-height: 50px;
-  --schedule-header-row-height: 44px;
-  height: 100%;
+  height: max-content;
   min-height: 100%;
   grid-auto-rows: minmax(var(--schedule-row-min-height), var(--schedule-row-max-height));
   align-content: start;
@@ -289,7 +365,7 @@
   width: 0;
   background: var(--today);
   box-shadow:
-    inset 1px 0 0 var(--border-accent-medium),
+    inset 1px 0 0 var(--accent-3),
     inset -1px 0 0 var(--accent-3);
   pointer-events: none;
   z-index: 1;
@@ -319,10 +395,10 @@
   overflow: hidden;
   -webkit-user-select: none;
   user-select: none;
-  --cell-hover-overlay: rgba(128, 132, 142, .22);
+  --cell-hover-overlay: rgba(128, 132, 142, 0.22);
 
   background: var(--table-weekday-bg);
-  transition: background .12s ease;
+  transition: background 0.12s ease;
 }
 
 .cell.employeeRowCell {
@@ -335,20 +411,37 @@
 
 .cell.shiftRowCell {
   min-height: 25px;
+  padding-top: 2px;
+  padding-bottom: 2px;
 }
 
 .cell.shiftRowCell:not(.namecol) {
   container-type: size;
 }
 
+.cell.shiftRowCell.namecol .groupRow {
+  font-size: 12px;
+  line-height: 1.05;
+  width: 100%;
+}
+
+.cell.shiftRowCell.namecol .groupMeta {
+  font-size: 11px;
+}
+
+.cell.shiftRowCell.namecol {
+  display: flex;
+  align-items: center;
+}
+
 .cell::after {
-  content: "";
+  content: '';
   position: absolute;
   inset: 0;
   background: var(--cell-hover-overlay);
   opacity: 0;
   pointer-events: none;
-  transition: opacity .12s ease;
+  transition: opacity 0.12s ease;
 }
 
 .cell:hover::after {
@@ -388,7 +481,7 @@
 }
 
 .cell.rowSelected::before {
-  content: "";
+  content: '';
   position: absolute;
   inset: 0;
   pointer-events: none;
@@ -432,11 +525,10 @@
 .hdr {
   position: sticky;
   top: 0;
-  z-index: 5;
+  z-index: 20;
   height: var(--schedule-header-row-height);
   min-height: var(--schedule-header-row-height);
-  background:
-    linear-gradient(180deg,
+  background: linear-gradient(180deg,
       var(--table-header-gradient-start),
       var(--table-header-gradient-end));
   border-bottom: 1px solid var(--table-border-color);
@@ -445,20 +537,64 @@
 .namecol {
   position: sticky;
   left: 0;
-  z-index: 4;
+  z-index: 30;
+  grid-column: 1;
   background: var(--table-team-cell-bg);
-  backdrop-filter: blur(10px);
   border-right: 1px solid var(--table-border-color);
 }
 
 .hdr.namecol {
-  z-index: 7;
+  z-index: 40;
   display: flex;
   align-items: center;
-  background:
-    linear-gradient(180deg,
+  background: linear-gradient(180deg,
       var(--table-header-gradient-start),
       var(--table-header-gradient-end));
+}
+
+.teamColumnRailToggle {
+  left: var(--team-col-width, clamp(220px, 20vw, 360px));
+  z-index: 30;
+  grid-column: 2;
+  grid-row: 1 / -1;
+  align-self: stretch;
+  width: var(--team-toggle-col-width, 14px);
+  min-width: var(--team-toggle-col-width, 14px);
+  max-width: var(--team-toggle-col-width, 14px);
+  display: block;
+  padding: 0;
+  overflow: hidden;
+  background: var(--table-team-cell-bg);
+  border-right: 1px solid var(--table-border-color);
+  cursor: pointer;
+}
+
+.teamColumnRailViewportGlyph {
+  position: absolute;
+  left: calc(var(--team-col-width, clamp(220px, 20vw, 360px)) + (var(--team-toggle-col-width, 14px) / 2));
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 14px;
+  height: 14px;
+  display: grid;
+  place-items: center;
+  z-index: 45;
+  pointer-events: none;
+}
+
+.teamColumnRailViewportGlyph svg {
+  width: 12px;
+  height: 12px;
+  stroke: var(--text);
+  stroke-width: 2.4;
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.teamColumnRailToggle:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--interactive-border-hover);
 }
 
 /* Top-left header cell: keep label vertically centered */
@@ -469,16 +605,11 @@
 
 .teamHeader.clickable {
   cursor: pointer;
-}
-
-.teamHeader.clickable:hover {
-  background:
-    linear-gradient(180deg, var(--team-cell-hover), var(--today));
+  --cell-hover-overlay: var(--team-cell-hover);
 }
 
 .teamHeader.clickable:active {
-  background:
-    linear-gradient(180deg, var(--team-cell-active), var(--team-cell-hover));
+  --cell-hover-overlay: var(--team-cell-active);
 }
 
 .teamHeader.clickable:focus-visible {
@@ -503,7 +634,7 @@
   font-size: 10px;
   color: var(--muted);
   font-weight: 850;
-  letter-spacing: .03em;
+  letter-spacing: 0.03em;
 }
 
 .dayhdr.selectableColumnHeader {
@@ -520,14 +651,13 @@
 }
 
 .dayhdr.wknd {
-  background:
-    linear-gradient(180deg,
+  background: linear-gradient(180deg,
       var(--table-header-gradient-start),
       var(--table-header-gradient-end)) !important;
 }
 
 .dayhdr.wknd::before {
-  content: "";
+  content: '';
   position: absolute;
   inset: 0;
   background: var(--table-weekend-bg);
@@ -536,7 +666,17 @@
 }
 
 .todayhdr {
-  background: var(--today) !important;
+  background: linear-gradient(180deg,
+      var(--table-header-gradient-start),
+      var(--table-header-gradient-end)) !important;
+}
+
+.todayHeaderOverlay {
+  position: absolute;
+  inset: 0;
+  background: var(--today-header-bg);
+  pointer-events: none;
+  z-index: 0;
 }
 
 .groupRow {
@@ -569,7 +709,7 @@
 
 .person .n {
   font-weight: 900;
-  letter-spacing: .01em;
+  letter-spacing: 0.01em;
   font-size: 13px;
   line-height: 1.12;
 }
@@ -583,7 +723,7 @@
   margin: 0;
   font-weight: 950;
   font-size: 10px;
-  letter-spacing: .02em;
+  letter-spacing: 0.02em;
   line-height: 1;
   border: 1px solid var(--interactive-border);
   user-select: none;
@@ -596,7 +736,7 @@
 }
 
 .i-work::after {
-  content: "";
+  content: '';
   width: 8px;
   height: 8px;
   border-radius: 999px;
@@ -635,7 +775,7 @@
 
 .indicator .glyph.oot {
   font-size: 8px;
-  letter-spacing: .02em;
+  letter-spacing: 0.02em;
 }
 
 .center {
@@ -649,10 +789,21 @@
 .cellShiftOverrideBg {
   position: absolute;
   inset: 0;
+  --shift-override-border-width: 4px;
+  opacity: var(--event-shift-override-opacity, 0.95);
   background: var(--event-shift-override-bg);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  padding: var(--shift-override-border-width);
+  box-sizing: border-box;
   pointer-events: none;
-  z-index: 0;
-  opacity: var(--event-shift-override-opacity, 0.5);
+  z-index: 3;
 }
 
 .cellEventOverlay {
@@ -660,111 +811,124 @@
   inset: 0;
   background: var(--event-overlay-bg);
   pointer-events: none;
-  z-index: 2;
+  z-index: 1;
 }
 
 .cellEventBadge {
-  --event-badge-size: min(76cqi, 54cqb);
   position: absolute;
   inset: 0;
   margin: auto;
-  width: var(--event-badge-size);
-  height: var(--event-badge-size);
-  border-radius: 3px;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--text);
+  border-radius: 999px;
   background: var(--event-badge-bg);
-  clip-path: polygon(50% 0%, 94% 25%, 94% 75%, 50% 100%, 6% 75%, 6% 25%);
-  box-shadow:
-    0 0 0 1px rgba(6, 10, 16, 0.72),
-    0 1px 2px rgba(0, 0, 0, 0.24);
-  opacity: 0.92;
   pointer-events: none;
   z-index: 4;
 }
 
-.cellEventBadge::before {
-  content: "";
-  position: absolute;
-  inset: 50% 18% auto 18%;
-  height: 2px;
-  border-radius: 2px;
-  background: rgba(245, 248, 255, 0.86);
-  transform: translateY(-50%);
-  opacity: 0.95;
-}
-
-[data-scope="shift-day"] .cellEventBadge {
-  --event-badge-size: min(76cqi, 86cqb);
-}
-
-.cellEventBadge::after {
-  content: "";
-  position: absolute;
-  inset: 34% 41%;
-  border-radius: 2px;
-  background: rgba(10, 14, 24, 0.65);
-  opacity: 0.92;
-}
-
 .dayHeaderEventBadge {
   position: absolute;
-  top: 8px;
-  left: 50%;
-  width: 20px;
-  height: 20px;
-  border-radius: 3px;
-  transform: translateX(-50%);
-  background: var(--event-badge-bg);
-  clip-path: polygon(50% 0%, 94% 25%, 94% 75%, 50% 100%, 6% 75%, 6% 25%);
-  border: 1px solid rgba(10, 14, 22, 0.55);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.24);
+  inset: 0;
+  --day-header-badge-chip-size: 20px;
   pointer-events: none;
-  z-index: 0;
+  z-index: 4;
 }
 
-:root[data-theme="light"] .gridwrap {
-  background: linear-gradient(180deg, rgba(255, 255, 255, .60), rgba(0, 0, 0, .02));
+.dayHeaderEventBadgeChip {
+  position: absolute;
+  width: var(--day-header-badge-chip-size);
+  height: var(--day-header-badge-chip-size);
+  border-radius: 999px;
+  background: var(--event-badge-bg);
+  border: 1px solid var(--text);
 }
 
-:root[data-theme="light"] .cell {
+.dayHeaderEventBadgeChipTopLeft {
+  top: 0;
+  left: 0;
+  transform: translate(-50%, -50%);
+}
+
+.dayHeaderEventBadgeChipTopRight {
+  top: 0;
+  right: 0;
+  transform: translate(50%, -50%);
+}
+
+.dayHeaderEventBadgeChipBottomLeft {
+  bottom: 0;
+  left: 0;
+  transform: translate(-50%, 50%);
+}
+
+.dayHeaderEventBadgeChipBottomRight {
+  right: 0;
+  bottom: 0;
+  transform: translate(50%, 50%);
+}
+
+:root[data-theme='light'] .gridwrap {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.6), rgba(0, 0, 0, 0.02));
+}
+
+:root[data-theme='light'] .cell {
   background: var(--table-weekday-bg);
   border-right-color: var(--table-border-color);
   border-bottom-color: var(--table-border-color);
-  --cell-hover-overlay: rgba(120, 124, 132, .16);
+  --cell-hover-overlay: rgba(120, 124, 132, 0.16);
 }
 
-:root[data-theme="light"] .cell.columnSelected {
+:root[data-theme='light'] .cell.columnSelected {
   border-left-color: var(--column-highlight-color);
   border-right-color: var(--column-highlight-color);
 }
 
-:root[data-theme="light"] .cell.columnSelected.colStart {
+:root[data-theme='light'] .cell.columnSelected.colStart {
   border-top-color: var(--column-highlight-color);
 }
 
-:root[data-theme="light"] .cell.columnSelected.colEnd {
+:root[data-theme='light'] .cell.columnSelected.colEnd {
   border-bottom-color: var(--column-highlight-color);
 }
 
-:root[data-theme="light"] .hdr {
-  background:
-    linear-gradient(180deg,
+:root[data-theme='light'] .hdr {
+  background: linear-gradient(180deg,
       var(--table-header-gradient-start),
       var(--table-header-gradient-end));
   border-bottom-color: var(--table-border-color);
 }
 
-:root[data-theme="light"] .namecol {
+:root[data-theme='light'] .namecol {
   background: var(--table-team-cell-bg);
   border-right-color: var(--table-border-color);
 }
 
-:root[data-theme="light"] .hdr.namecol {
-  background:
-    linear-gradient(180deg,
+:root[data-theme='light'] .hdr.namecol {
+  background: linear-gradient(180deg,
       var(--table-header-gradient-start),
       var(--table-header-gradient-end));
 }
 
-:root[data-theme="light"] .cell.wknd:not(.dayhdr) {
+:root[data-theme='light'] .cell.wknd:not(.dayhdr) {
   background: var(--table-weekend-bg) !important;
+}
+
+:root[data-theme='light'] .cell.wknd.patternCell:not(.dayhdr) {
+  background: var(--pattern-cell-bg) !important;
+}
+
+.gridwrapShell.mobileTeamColumnCollapsed .namecol:not(.teamColumnRailToggle) {
+  width: 0 !important;
+  min-width: 0 !important;
+  max-width: 0 !important;
+  padding: 0;
+  overflow: hidden;
+  border-right-color: transparent;
+  pointer-events: none;
+}
+
+.gridwrapShell.mobileTeamColumnCollapsed .namecol:not(.teamColumnRailToggle)>* {
+  opacity: 0;
+  pointer-events: none;
 }

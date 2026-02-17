@@ -9,6 +9,8 @@ type EventDisplayMode = 'Schedule Overlay' | 'Badge Indicator' | 'Shift Override
 
 type ScheduleEventRow = {
 	EventId: number;
+	UserOid: string | null;
+	EmployeeTypeId: number | null;
 	StartDate: Date | string;
 	EndDate: Date | string;
 	Notes: string | null;
@@ -21,6 +23,12 @@ type ScheduleEventRow = {
 	CoverageLabel: string | null;
 	CoverageDisplayMode: EventDisplayMode | null;
 	CoverageColor: string | null;
+};
+
+type ExistingEventScopeRow = {
+	EventId: number;
+	UserOid: string | null;
+	EmployeeTypeId: number | null;
 };
 
 type ScheduleEventsCapabilities = {
@@ -309,6 +317,9 @@ export const GET: RequestHandler = async ({ locals, cookies, url }) => {
 		allowUserShiftContext: true
 	});
 	const capabilities = await getScheduleEventsCapabilities(pool);
+	if (scope === 'user' && capabilities.hasEmployeeTypeId && employeeTypeId === null) {
+		throw error(400, 'User scope requires employeeTypeId');
+	}
 
 	const request = pool
 		.request()
@@ -339,7 +350,11 @@ export const GET: RequestHandler = async ({ locals, cookies, url }) => {
 	const shiftPredicate = capabilities.hasEmployeeTypeId
 		? '(se.EmployeeTypeId = @employeeTypeId AND se.UserOid IS NULL)'
 		: '(1 = 0)';
-	const userPredicate = '(se.UserOid = @userOid)';
+	const userPredicate = capabilities.hasEmployeeTypeId
+		? employeeTypeId !== null
+			? '(se.UserOid = @userOid AND se.EmployeeTypeId = @employeeTypeId)'
+			: '(se.UserOid = @userOid AND se.EmployeeTypeId IS NULL)'
+		: '(se.UserOid = @userOid)';
 
 	const scopePredicate =
 		scope === 'global'
@@ -353,6 +368,7 @@ export const GET: RequestHandler = async ({ locals, cookies, url }) => {
 	const result = await request.query(
 		`SELECT
 			se.EventId,
+			se.UserOid,
 			se.StartDate,
 			se.EndDate,
 			se.Notes,
@@ -382,6 +398,12 @@ export const GET: RequestHandler = async ({ locals, cookies, url }) => {
 
 	const events = (result.recordset as ScheduleEventRow[]).map((row) => {
 		const coverageCodeId = row.CoverageCodeId === null ? null : Number(row.CoverageCodeId);
+		const employeeTypeId =
+			row.EmployeeTypeId === null || row.EmployeeTypeId === undefined
+				? null
+				: Number(row.EmployeeTypeId);
+		const userOid = row.UserOid?.trim() || null;
+		const scopeType: EventScopeType = userOid ? 'user' : employeeTypeId !== null ? 'shift' : 'global';
 		const isCustom = coverageCodeId === null;
 		const eventCodeCode = (coverageCodeId ? row.CoverageCode : row.CustomCode)?.trim() || '';
 		const fallbackName = eventCodeCode || 'Event';
@@ -394,6 +416,8 @@ export const GET: RequestHandler = async ({ locals, cookies, url }) => {
 			eventCodeId: coverageCodeId,
 			eventCodeCode,
 			eventCodeName,
+			scopeType,
+			employeeTypeId,
 			eventDisplayMode:
 				(coverageCodeId ? row.CoverageDisplayMode : row.CustomDisplayMode) ?? 'Schedule Overlay',
 			eventCodeColor: (coverageCodeId ? row.CoverageColor : row.CustomColor)?.trim() || '#22c55e',
@@ -420,9 +444,14 @@ export const POST: RequestHandler = async ({ locals, cookies, request }) => {
 	}
 
 	const capabilities = await getScheduleEventsCapabilities(pool);
-	const { employeeTypeId, userOid } = await cleanScopeInputs(pool, scheduleId, body);
+	const { scope, employeeTypeId, userOid } = await cleanScopeInputs(pool, scheduleId, body, {
+		allowUserShiftContext: true
+	});
 	if (employeeTypeId !== null && !capabilities.hasEmployeeTypeId) {
 		throw error(400, 'Shift-scoped events require a ScheduleEvents schema update.');
+	}
+	if (scope === 'user' && capabilities.hasEmployeeTypeId && employeeTypeId === null) {
+		throw error(400, 'User scope requires employeeTypeId');
 	}
 	const startDate = cleanDateOnly(body.startDate, 'Start date');
 	const endDate = cleanDateOnly(body.endDate, 'End date');
@@ -513,21 +542,27 @@ export const PATCH: RequestHandler = async ({ locals, cookies, request }) => {
 		.input('scheduleId', scheduleId)
 		.input('eventId', eventId)
 		.query(
-			`SELECT TOP (1) EventId
+			`SELECT TOP (1)
+				EventId,
+				UserOid,
+				${capabilities.hasEmployeeTypeId ? 'EmployeeTypeId' : 'CAST(NULL AS int) AS EmployeeTypeId'}
 			 FROM dbo.ScheduleEvents
 			 WHERE ScheduleId = @scheduleId
 			   AND EventId = @eventId
 			   AND IsActive = 1
 			   AND DeletedAt IS NULL;`
 		);
-	if (!existsResult.recordset?.[0]?.EventId) {
+	const existingEvent = (existsResult.recordset?.[0] as ExistingEventScopeRow | undefined) ?? null;
+	if (!existingEvent?.EventId) {
 		throw error(404, 'Event not found');
 	}
 
-	const { employeeTypeId, userOid } = await cleanScopeInputs(pool, scheduleId, body);
-	if (employeeTypeId !== null && !capabilities.hasEmployeeTypeId) {
-		throw error(400, 'Shift-scoped events require a ScheduleEvents schema update.');
-	}
+	const userOid = existingEvent.UserOid?.trim() || null;
+	const employeeTypeId =
+		existingEvent.EmployeeTypeId === null || existingEvent.EmployeeTypeId === undefined
+			? null
+			: Number(existingEvent.EmployeeTypeId);
+
 	const startDate = cleanDateOnly(body.startDate, 'Start date');
 	const endDate = cleanDateOnly(body.endDate, 'End date');
 	if (endDate < startDate) {

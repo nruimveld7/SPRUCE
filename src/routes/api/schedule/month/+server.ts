@@ -684,8 +684,6 @@ export const GET: RequestHandler = async ({ locals, cookies, url }) => {
 			 LEFT JOIN dbo.CoverageCodes cc
 			   ON cc.ScheduleId = se.ScheduleId
 			  AND cc.CoverageCodeId = se.CoverageCodeId
-			  AND cc.IsActive = 1
-			  AND cc.DeletedAt IS NULL
 			 WHERE se.ScheduleId = @scheduleId
 			   AND se.IsActive = 1
 			   AND se.DeletedAt IS NULL

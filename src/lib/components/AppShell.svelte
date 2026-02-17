@@ -7,11 +7,12 @@
 	import ScheduleGrid from '$lib/components/ScheduleGrid.svelte';
 	import TeamSetupModal from '$lib/components/TeamSetupModal.svelte';
 	import ScheduleSetupModal from '$lib/components/ScheduleSetupModal.svelte';
-	import { demo, overrides as demoOverrides } from '$lib/data/demoData';
-	import type { Employee, Group, ScheduleEvent } from '$lib/data/demoData';
+	import type { Employee, Group, ScheduleEvent, Status } from '$lib/types/schedule';
+	import { fetchWithAuthRedirect } from '$lib/utils/fetchWithAuthRedirect';
 	import { buildMonthDays, monthNames } from '$lib/utils/date';
 
 	type Theme = 'light' | 'dark';
+	type ThemePreference = 'system' | 'dark' | 'light';
 	type ScheduleRole = 'Member' | 'Maintainer' | 'Manager';
 	type ScheduleMembership = {
 		ScheduleId: number;
@@ -71,6 +72,7 @@
 		'accent-2',
 		'accent-3',
 		'today',
+		'today-header-bg',
 		'focus-ring',
 		'interactive-bg',
 		'interactive-bg-hover',
@@ -142,19 +144,26 @@
 	let selectedYear = initialDate.getFullYear();
 	let selectedMonthIndex = initialDate.getMonth();
 	let theme: Theme = 'dark';
+	let themePreferenceState: ThemePreference = 'system';
+	let systemTheme: Theme = 'dark';
 	let collapsed: Record<string, boolean> = {};
+	let sessionCollapsedBySchedule: Record<number, Record<string, boolean>> = {};
+	let persistedCollapsedBySchedule: Record<number, Record<string, boolean>> = {};
+	let collapsedDefaultsSyncStateBySchedule: Record<number, 'idle' | 'syncing' | 'synced'> = {};
 	let initialThemeReady = false;
 
 	export let scheduleName = 'Shift Schedule';
 	export let activeScheduleId: number | null = null;
 	export let scheduleMemberships: ScheduleMembership[] = [];
-	export let groups = demo;
-	export let overrides = demoOverrides;
+	export let groups: Group[] = [];
+	export let overrides: Record<string, { day: number; status: Status }[]> = {};
 	export let showLegend = true;
 	export let canMaintainTeam = false;
 	export let canAssignManagerRole = false;
 	export let canOpenScheduleSetup = false;
 	export let currentUserOid = '';
+	export let collapsedGroupsBySchedule: Record<number, Record<string, boolean>> = {};
+	export let themePreference: ThemePreference = 'system';
 
 	let teamSetupOpen = false;
 	let scheduleSetupOpen = false;
@@ -174,6 +183,8 @@
 	let scheduleLoadKey = '';
 	let isScheduleTransitioning = false;
 	let lastRequestedMonthViewKey = `${selectedYear}-${selectedMonthIndex}`;
+	let activeScheduleThemeSignature = '';
+	let lastAppliedThemeSignature = '';
 	let displayNameEditorOpen = false;
 	let displayNameEditorUserOid = '';
 	let displayNameEditorCurrentName = '';
@@ -274,7 +285,7 @@
 		const textAlpha = isDark ? 0.98 : 0.92;
 		const mutedAlpha = isDark ? 0.72 : 0.66;
 		const faintAlpha = isDark ? 0.5 : 0.46;
-		const todayAlpha = isDark ? 0.24 : 0.20;
+		const todayAlpha = isDark ? 0.24 : 0.2;
 		const interactiveAlpha = isDark ? 0.06 : 0.72;
 		const interactiveHoverAlpha = isDark ? 0.09 : 0.86;
 		const cellActiveAlpha = isDark ? 0.2 : 0.15;
@@ -310,6 +321,7 @@
 			[`--theme-${mode}-accent-2`]: rgba(accent, 0.3),
 			[`--theme-${mode}-accent-3`]: rgba(accent, 0.15),
 			[`--theme-${mode}-today`]: rgba(todayColor, todayAlpha),
+			[`--theme-${mode}-today-header-bg`]: rgba(todayColor, 0.33),
 			[`--theme-${mode}-focus-ring`]: `0 0 0 3px ${rgba(accent, 0.22)}`,
 			[`--theme-${mode}-interactive-bg`]: isDark
 				? rgba('#ffffff', interactiveAlpha)
@@ -338,15 +350,12 @@
 			[`--theme-${mode}-border-accent-medium`]: rgba(border, 0.42),
 			[`--theme-${mode}-border-accent-strong`]: rgba(border, 0.55),
 			[`--theme-${mode}-border-accent-focus`]: rgba(border, 0.72),
-			[`--theme-${mode}-table-weekday-bg`]: rgba(weekdayColor, isDark ? 0.18 : 0.82),
-			[`--theme-${mode}-table-weekend-bg`]: rgba(weekendColor, isDark ? 0.5 : 0.22),
-			[`--theme-${mode}-table-border-color`]: rgba(scheduleBorderColor, isDark ? 0.86 : 0.7),
-			[`--theme-${mode}-table-header-gradient-start`]: rgba(weekdayColor, isDark ? 0.72 : 0.84),
-			[`--theme-${mode}-table-header-gradient-end`]: rgba(
-				headerGradientBottom,
-				isDark ? 0.9 : 0.92
-			),
-			[`--theme-${mode}-table-team-cell-bg`]: rgba(teamCellColor, isDark ? 0.92 : 0.94),
+			[`--theme-${mode}-table-weekday-bg`]: rgba(weekdayColor, 1),
+			[`--theme-${mode}-table-weekend-bg`]: rgba(weekendColor, 1),
+			[`--theme-${mode}-table-border-color`]: rgba(scheduleBorderColor, 1),
+			[`--theme-${mode}-table-header-gradient-start`]: rgba(weekdayColor, 1),
+			[`--theme-${mode}-table-header-gradient-end`]: rgba(headerGradientBottom, 1),
+			[`--theme-${mode}-table-team-cell-bg`]: rgba(teamCellColor, 1),
 			[`--theme-${mode}-gradient-header-start`]: headerGradientFrom,
 			[`--theme-${mode}-gradient-header-end`]: headerGradientTo,
 			[`--theme-${mode}-gradient-modal-start`]: modalGradientFrom,
@@ -413,7 +422,7 @@
 		}
 	}
 
-	function applyActiveScheduleThemeOnLoad() {
+	function applyActiveScheduleTheme() {
 		const activeMembership =
 			scheduleMemberships.find((membership) => membership.ScheduleId === activeScheduleId) ??
 			scheduleMemberships.find((membership) => membership.IsDefault) ??
@@ -542,16 +551,25 @@
 
 	$: if (browser) {
 		document.documentElement.dataset.theme = theme;
-		try {
-			localStorage.setItem('shiftTheme', theme);
-		} catch {
-			// ignore storage failures
-		}
 	}
 
 	$: if (browser && initialThemeReady && activeScheduleId !== lastSyncedActiveScheduleId) {
 		lastSyncedActiveScheduleId = activeScheduleId;
 		setToToday();
+	}
+	$: activeScheduleThemeSignature = `${activeScheduleId ?? 'none'}|${scheduleMemberships
+		.map(
+			(membership) =>
+				`${membership.ScheduleId}:${membership.IsDefault ? 1 : 0}:${membership.ThemeJson ?? ''}`
+		)
+		.join('|')}`;
+	$: if (
+		browser &&
+		initialThemeReady &&
+		activeScheduleThemeSignature !== lastAppliedThemeSignature
+	) {
+		lastAppliedThemeSignature = activeScheduleThemeSignature;
+		applyActiveScheduleTheme();
 	}
 
 	const months = monthNames.map((label, value) => ({ label, value }));
@@ -565,8 +583,58 @@
 		theme = next;
 	}
 
+	function resolveSystemTheme(): Theme {
+		if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+			return 'dark';
+		}
+		return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+	}
+
+	function resolveEffectiveTheme(preference: ThemePreference): Theme {
+		if (preference === 'system') {
+			return systemTheme;
+		}
+		return preference;
+	}
+
+	function setThemePreferenceState(nextPreference: ThemePreference) {
+		themePreferenceState = nextPreference;
+		setTheme(resolveEffectiveTheme(nextPreference));
+	}
+
+	function getNextThemePreference(preference: ThemePreference): ThemePreference {
+		if (preference === 'system') return 'dark';
+		if (preference === 'dark') return 'light';
+		return 'system';
+	}
+
+	async function persistThemePreference(nextPreference: ThemePreference): Promise<boolean> {
+		try {
+			const response = await fetchWithAuthRedirect(
+				`${base}/api/schedules/theme-preference`,
+				{
+					method: 'PATCH',
+					headers: { 'content-type': 'application/json', accept: 'application/json' },
+					body: JSON.stringify({ themePreference: nextPreference })
+				},
+				base
+			);
+			if (!response) return false;
+			return response.ok;
+		} catch {
+			return false;
+		}
+	}
+
 	function toggleTheme() {
-		setTheme(theme === 'light' ? 'dark' : 'light');
+		const nextPreference = getNextThemePreference(themePreferenceState);
+		setThemePreferenceState(nextPreference);
+		void persistThemePreference(nextPreference);
+	}
+
+	function handleScheduleSetupThemeModeChange(nextMode: ThemeMode) {
+		setThemePreferenceState(nextMode);
+		void persistThemePreference(nextMode);
 	}
 
 	function setToToday() {
@@ -575,8 +643,148 @@
 		selectedMonthIndex = d.getMonth();
 	}
 
-	function toggleGroup(groupName: string) {
-		collapsed = { ...collapsed, [groupName]: !collapsed[groupName] };
+	function cloneCollapsedBySchedule(
+		source: Record<number, Record<string, boolean>>
+	): Record<number, Record<string, boolean>> {
+		const output: Record<number, Record<string, boolean>> = {};
+		for (const [scheduleId, groupState] of Object.entries(source)) {
+			output[Number(scheduleId)] = { ...(groupState ?? {}) };
+		}
+		return output;
+	}
+
+	function groupCollapseKey(group: Group): string {
+		if (typeof group.employeeTypeId === 'number' && Number.isInteger(group.employeeTypeId)) {
+			return `shift:${group.employeeTypeId}`;
+		}
+		return `name:${group.category.trim().toLowerCase()}`;
+	}
+
+	function groupLegacyCollapseKey(groupName: string): string {
+		return groupName.trim();
+	}
+
+	function updateSessionCollapsedState(
+		scheduleId: number,
+		groupKey: string,
+		collapsedState: boolean
+	) {
+		const nextScheduleState = {
+			...(sessionCollapsedBySchedule[scheduleId] ?? {}),
+			[groupKey]: collapsedState
+		};
+		sessionCollapsedBySchedule = {
+			...sessionCollapsedBySchedule,
+			[scheduleId]: nextScheduleState
+		};
+	}
+
+	function updatePersistedCollapsedState(
+		scheduleId: number,
+		groupKey: string,
+		collapsedState: boolean
+	) {
+		const nextScheduleState = {
+			...(persistedCollapsedBySchedule[scheduleId] ?? {}),
+			[groupKey]: collapsedState
+		};
+		persistedCollapsedBySchedule = {
+			...persistedCollapsedBySchedule,
+			[scheduleId]: nextScheduleState
+		};
+	}
+
+	function missingPersistedCollapseKeys(scheduleId: number, nextGroups: Group[]): string[] {
+		const persisted = persistedCollapsedBySchedule[scheduleId] ?? {};
+		const missingKeys: string[] = [];
+		for (const group of nextGroups) {
+			const key = groupCollapseKey(group);
+			const legacyKey = groupLegacyCollapseKey(group.category);
+			if (!(key in persisted) && !(legacyKey in persisted)) {
+				missingKeys.push(key);
+			}
+		}
+		return missingKeys;
+	}
+
+	function currentCollapsedForGroup(scheduleId: number, group: Group): boolean {
+		const key = groupCollapseKey(group);
+		const legacyKey = groupLegacyCollapseKey(group.category);
+		const scheduleState = sessionCollapsedBySchedule[scheduleId] ?? {};
+		if (key in scheduleState) return scheduleState[key] === true;
+		if (legacyKey in scheduleState) return scheduleState[legacyKey] === true;
+		return false;
+	}
+
+	function toggleGroup(group: Group) {
+		if (activeScheduleId === null) return;
+		const key = groupCollapseKey(group);
+		const nextCollapsed = !currentCollapsedForGroup(activeScheduleId, group);
+		updateSessionCollapsedState(activeScheduleId, key, nextCollapsed);
+		updatePersistedCollapsedState(activeScheduleId, key, nextCollapsed);
+		void persistCollapsedGroupPreference(activeScheduleId, key, nextCollapsed);
+	}
+
+	async function persistCollapsedGroupPreference(
+		scheduleId: number,
+		groupKey: string,
+		collapsedState: boolean
+	): Promise<boolean> {
+		try {
+			const response = await fetch(`${base}/api/schedules/collapsed-groups`, {
+				method: 'PATCH',
+				headers: { 'content-type': 'application/json', accept: 'application/json' },
+				body: JSON.stringify({
+					scheduleId,
+					groupKey,
+					collapsed: collapsedState
+				})
+			});
+			if (!response.ok) {
+				throw new Error('Failed to persist collapsed-group preference');
+			}
+			return true;
+		} catch {
+			// ignore save failures and keep the local UI state
+			return false;
+		}
+	}
+
+	async function ensurePersistedCollapsedDefaults(scheduleId: number, nextGroups: Group[]) {
+		const existingSyncState = collapsedDefaultsSyncStateBySchedule[scheduleId] ?? 'idle';
+		if (existingSyncState === 'syncing' || existingSyncState === 'synced') return;
+		const missingKeys = missingPersistedCollapseKeys(scheduleId, nextGroups);
+		if (missingKeys.length === 0) {
+			collapsedDefaultsSyncStateBySchedule = {
+				...collapsedDefaultsSyncStateBySchedule,
+				[scheduleId]: 'synced'
+			};
+			return;
+		}
+
+		collapsedDefaultsSyncStateBySchedule = {
+			...collapsedDefaultsSyncStateBySchedule,
+			[scheduleId]: 'syncing'
+		};
+		for (const key of missingKeys) {
+			updatePersistedCollapsedState(scheduleId, key, false);
+		}
+
+		try {
+			const results = await Promise.all(
+				missingKeys.map((groupKey) => persistCollapsedGroupPreference(scheduleId, groupKey, false))
+			);
+			const status: 'idle' | 'synced' = results.every((result) => result) ? 'synced' : 'idle';
+			collapsedDefaultsSyncStateBySchedule = {
+				...collapsedDefaultsSyncStateBySchedule,
+				[scheduleId]: status
+			};
+		} catch {
+			collapsedDefaultsSyncStateBySchedule = {
+				...collapsedDefaultsSyncStateBySchedule,
+				[scheduleId]: 'idle'
+			};
+		}
 	}
 
 	function openTeamSetup() {
@@ -638,14 +846,19 @@
 		displayNameEditorSaving = true;
 		displayNameEditorError = '';
 		try {
-			const response = await fetch(`${base}/api/team/display-name`, {
-				method: 'PATCH',
-				headers: { 'content-type': 'application/json', accept: 'application/json' },
-				body: JSON.stringify({
-					userOid: displayNameEditorUserOid,
-					displayName: nextDisplayName
-				})
-			});
+			const response = await fetchWithAuthRedirect(
+				`${base}/api/team/display-name`,
+				{
+					method: 'PATCH',
+					headers: { 'content-type': 'application/json', accept: 'application/json' },
+					body: JSON.stringify({
+						userOid: displayNameEditorUserOid,
+						displayName: nextDisplayName
+					})
+				},
+				base
+			);
+			if (!response) return;
 			if (!response.ok) {
 				const payload = (await response.json().catch(() => null)) as { message?: string } | null;
 				throw new Error(payload?.message?.trim() || 'Failed to update display name');
@@ -698,6 +911,9 @@
 			};
 			scheduleGroups = Array.isArray(payload.groups) ? payload.groups : [];
 			scheduleEvents = Array.isArray(payload.events) ? payload.events : [];
+			if (activeScheduleId !== null) {
+				void ensurePersistedCollapsedDefaults(activeScheduleId, scheduleGroups);
+			}
 			scheduleGroupsLoaded = true;
 		} catch {
 			if (requestId !== scheduleGroupsRequestId) return;
@@ -719,28 +935,45 @@
 		await loadScheduleGroupsForMonth(selectedYear, selectedMonthIndex);
 	}
 
-	function syncCollapsedWithGroups(nextGroups: Group[]) {
-		const nextCollapsed = { ...collapsed };
+	function syncCollapsedWithGroups(scheduleId: number, nextGroups: Group[]) {
+		const nextScheduleState = { ...(sessionCollapsedBySchedule[scheduleId] ?? {}) };
 		let changed = false;
 		for (const group of nextGroups) {
-			if (!(group.category in nextCollapsed)) {
-				nextCollapsed[group.category] = false;
-				changed = true;
-			}
-		}
-		for (const key of Object.keys(nextCollapsed)) {
-			if (!nextGroups.some((group) => group.category === key)) {
-				delete nextCollapsed[key];
+			const key = groupCollapseKey(group);
+			const legacyKey = groupLegacyCollapseKey(group.category);
+			if (!(key in nextScheduleState)) {
+				if (legacyKey in nextScheduleState) {
+					nextScheduleState[key] = nextScheduleState[legacyKey] === true;
+				} else {
+					nextScheduleState[key] = false;
+				}
 				changed = true;
 			}
 		}
 		if (changed) {
-			collapsed = nextCollapsed;
+			sessionCollapsedBySchedule = {
+				...sessionCollapsedBySchedule,
+				[scheduleId]: nextScheduleState
+			};
 		}
 	}
 
 	$: effectiveGroups = scheduleGroupsLoaded ? scheduleGroups : groups;
-	$: syncCollapsedWithGroups(effectiveGroups);
+	$: {
+		// Keep this reactive block subscribed to collapse state changes triggered by row toggles.
+		sessionCollapsedBySchedule;
+		if (activeScheduleId === null) {
+			collapsed = {};
+		} else {
+			syncCollapsedWithGroups(activeScheduleId, effectiveGroups);
+			collapsed = Object.fromEntries(
+				effectiveGroups.map((group) => [
+					group.category,
+					currentCollapsedForGroup(activeScheduleId, group)
+				])
+			);
+		}
+	}
 	$: scheduleLoadKey = `${activeScheduleId ?? 'none'}:${selectedYear}-${selectedMonthIndex}`;
 	$: if (browser && scheduleLoadKey) {
 		const monthViewKey = `${selectedYear}-${selectedMonthIndex}`;
@@ -752,21 +985,42 @@
 	onMount(() => {
 		document.body.classList.add('app-shell-route');
 		setToToday();
-		collapsed = Object.fromEntries(effectiveGroups.map((group) => [group.category, false]));
-		let nextTheme: Theme = 'dark';
-		try {
-			const saved = localStorage.getItem('shiftTheme');
-			if (saved === 'light' || saved === 'dark') nextTheme = saved;
-		} catch {
-			// ignore storage failures
+		sessionCollapsedBySchedule = cloneCollapsedBySchedule(collapsedGroupsBySchedule);
+		persistedCollapsedBySchedule = cloneCollapsedBySchedule(collapsedGroupsBySchedule);
+		systemTheme = resolveSystemTheme();
+		setThemePreferenceState(themePreference);
+
+		let themeMediaQuery: MediaQueryList | null = null;
+		const handleSystemThemeChange = (event: MediaQueryListEvent) => {
+			systemTheme = event.matches ? 'dark' : 'light';
+			if (themePreferenceState === 'system') {
+				setTheme(systemTheme);
+			}
+		};
+		if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+			themeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+			if (typeof themeMediaQuery.addEventListener === 'function') {
+				themeMediaQuery.addEventListener('change', handleSystemThemeChange);
+			} else {
+				themeMediaQuery.addListener(handleSystemThemeChange);
+			}
 		}
-		setTheme(nextTheme);
-		applyActiveScheduleThemeOnLoad();
+
+		applyActiveScheduleTheme();
+		lastAppliedThemeSignature = activeScheduleThemeSignature;
 		initialThemeReady = true;
 		requestAnimationFrame(updateAppScrollbar);
 		const onResize = () => updateAppScrollbar();
 		window.addEventListener('resize', onResize);
-		return () => window.removeEventListener('resize', onResize);
+		return () => {
+			window.removeEventListener('resize', onResize);
+			if (!themeMediaQuery) return;
+			if (typeof themeMediaQuery.removeEventListener === 'function') {
+				themeMediaQuery.removeEventListener('change', handleSystemThemeChange);
+			} else {
+				themeMediaQuery.removeListener(handleSystemThemeChange);
+			}
+		};
 	});
 
 	afterUpdate(() => {
@@ -807,7 +1061,12 @@
 					{:else}
 						<div class="title">{scheduleName}</div>
 					{/if}
-					<ThemeToggle {theme} onToggle={toggleTheme} />
+					<ThemeToggle
+						mode="cycle"
+						themePreference={themePreferenceState}
+						effectiveTheme={theme}
+						onToggle={toggleTheme}
+					/>
 				</div>
 
 				{#if showLegend}
@@ -890,6 +1149,8 @@
 		open={scheduleSetupOpen}
 		{activeScheduleId}
 		{scheduleMemberships}
+		currentThemeMode={theme}
+		onThemeModeChange={handleScheduleSetupThemeModeChange}
 		onClose={closeScheduleSetup}
 	/>
 

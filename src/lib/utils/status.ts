@@ -1,4 +1,4 @@
-import type { Employee, Status } from '$lib/data/demoData';
+import type { Employee, Status } from '$lib/types/schedule';
 
 export function indicatorFor(status: Status) {
   switch (status) {
