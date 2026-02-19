@@ -7,7 +7,14 @@
 	import { fetchWithAuthRedirect as fetchWithAuthRedirectUtil } from '$lib/utils/fetchWithAuthRedirect';
 	import { onDestroy, onMount, tick } from 'svelte';
 
-	type SetupSection = 'users' | 'shifts' | 'patterns' | 'eventCodes' | 'assignments';
+	type SetupSection =
+		| 'users'
+		| 'shifts'
+		| 'shiftsWorkshop'
+		| 'patterns'
+		| 'eventCodes'
+		| 'assignments'
+		| 'assignmentsWorkshop';
 	type UserRole = 'Member' | 'Maintainer' | 'Manager';
 	type UsersViewMode = 'list' | 'add' | 'edit';
 	type ShiftsViewMode = 'list' | 'add' | 'edit';
@@ -29,6 +36,7 @@
 		changes?: ShiftChangeRow[];
 	};
 	type ShiftChangeRow = {
+		sortOrder?: number;
 		startDate: string;
 		endDate?: string | null;
 		name: string;
@@ -153,10 +161,17 @@
 	let addShiftSortOrder = '1';
 	let addShiftPatternId = '';
 	let addShiftStartDate = '';
+	let addShiftEndDate = '';
 	let shiftPatternPickerOpen = false;
 	let shiftStartDatePickerOpen = false;
+	let shiftEndDatePickerOpen = false;
+	let shiftsWorkshopMonth = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+	let shiftsWorkshopMonthPickerOpen = false;
 	let addShiftActionError = '';
 	let addShiftActionLoading = false;
+	let draggingShiftEmployeeTypeId: number | null = null;
+	let dragOverShiftEmployeeTypeId: number | null = null;
+	let isShiftReorderLoading = false;
 	let addPatternName = '';
 	let addPatternActionError = '';
 	let addPatternActionLoading = false;
@@ -222,8 +237,10 @@
 	const sections: { id: SetupSection; label: string }[] = [
 		{ id: 'users', label: 'Users' },
 		{ id: 'shifts', label: 'Shifts' },
+		{ id: 'shiftsWorkshop', label: 'Shifts Workshop' },
 		{ id: 'patterns', label: 'Shift Patterns' },
 		{ id: 'assignments', label: 'Assignments' },
+		{ id: 'assignmentsWorkshop', label: 'Assignments Workshop' },
 		{ id: 'eventCodes', label: 'Event Codes' }
 	];
 
@@ -248,11 +265,11 @@
 	let patternHasPredictionConflict = false;
 	let predictedOwnerIndexByDay: number[] = [];
 	let conflictedPredictionByDay: boolean[] = [];
-	const defaultPatternColor = '#00c1ff';
+	const defaultPatternColor = '#ffb000';
 	const maxPatternSwatches = 4;
 	const patternColorSeedPalette = [
-		'#00c1ff',
 		'#ffb000',
+		'#00c1ff',
 		'#22c55e',
 		'#f97316',
 		'#a855f7',
@@ -403,8 +420,10 @@
 		addShiftSortOrder = '1';
 		addShiftPatternId = '';
 		addShiftStartDate = '';
+		addShiftEndDate = '';
 		shiftPatternPickerOpen = false;
 		shiftStartDatePickerOpen = false;
+		shiftEndDatePickerOpen = false;
 		addShiftActionError = '';
 		addShiftActionLoading = false;
 	}
@@ -417,8 +436,10 @@
 		addShiftSortOrder = String(teamShifts.length + 1);
 		addShiftPatternId = '';
 		addShiftStartDate = '';
+		addShiftEndDate = '';
 		shiftPatternPickerOpen = false;
 		shiftStartDatePickerOpen = false;
+		shiftEndDatePickerOpen = false;
 		addShiftActionError = '';
 		addShiftActionLoading = false;
 		if (!patterns.length && !patternsLoading) {
@@ -435,8 +456,10 @@
 		addShiftSortOrder = String(shift.sortOrder);
 		addShiftPatternId = shift.patternId ? String(shift.patternId) : '';
 		addShiftStartDate = shift.startDate;
+		addShiftEndDate = '';
 		shiftPatternPickerOpen = false;
 		shiftStartDatePickerOpen = false;
+		shiftEndDatePickerOpen = false;
 		addShiftActionError = '';
 		addShiftActionLoading = false;
 		if (!patterns.length && !patternsLoading) {
@@ -453,8 +476,10 @@
 		addShiftSortOrder = String(shift.sortOrder);
 		addShiftPatternId = change.patternId ? String(change.patternId) : '';
 		addShiftStartDate = change.startDate;
+		addShiftEndDate = change.endDate ?? '';
 		shiftPatternPickerOpen = false;
 		shiftStartDatePickerOpen = false;
+		shiftEndDatePickerOpen = false;
 		addShiftActionError = '';
 		addShiftActionLoading = false;
 		if (!patterns.length && !patternsLoading) {
@@ -471,10 +496,159 @@
 		shiftStartDatePickerOpen = next;
 	}
 
+	function setShiftEndDatePickerOpen(next: boolean) {
+		shiftEndDatePickerOpen = next;
+	}
+
+	function setShiftsWorkshopMonthPickerOpen(next: boolean) {
+		shiftsWorkshopMonthPickerOpen = next;
+	}
+
 	function isValidDate(value: string): boolean {
 		if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
 		const parsed = new Date(`${value}T00:00:00Z`);
 		return !Number.isNaN(parsed.getTime());
+	}
+
+	function monthBounds(monthValue: string): { start: string; end: string } | null {
+		const trimmed = monthValue.trim();
+		const match = /^(\d{4})-(\d{2})$/.exec(trimmed);
+		if (!match) return null;
+		const year = Number(match[1]);
+		const month = Number(match[2]);
+		if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) return null;
+		const monthStart = new Date(Date.UTC(year, month - 1, 1));
+		const monthEnd = new Date(Date.UTC(year, month, 0));
+		const toIso = (value: Date) => {
+			const y = value.getUTCFullYear();
+			const m = String(value.getUTCMonth() + 1).padStart(2, '0');
+			const d = String(value.getUTCDate()).padStart(2, '0');
+			return `${y}-${m}-${d}`;
+		};
+		return { start: toIso(monthStart), end: toIso(monthEnd) };
+	}
+
+	function shiftChangeOverlapsMonth(change: ShiftChangeRow, monthValue: string): boolean {
+		const bounds = monthBounds(monthValue);
+		if (!bounds || !isValidDate(change.startDate)) return true;
+		const effectiveEnd = change.endDate && isValidDate(change.endDate) ? change.endDate : '9999-12-31';
+		return change.startDate <= bounds.end && effectiveEnd >= bounds.start;
+	}
+
+	function monthStartDate(monthValue: string): string | null {
+		const trimmed = monthValue.trim();
+		if (!/^\d{4}-\d{2}$/.test(trimmed)) return null;
+		return `${trimmed}-01`;
+	}
+
+	function shiftSortOrderForMonth(shift: ShiftRow, monthValue: string): number {
+		const matchingChanges = (shift.changes ?? [])
+			.filter((change) => shiftChangeOverlapsMonth(change, monthValue))
+			.sort((a, b) => a.startDate.localeCompare(b.startDate));
+		const lastMatch = matchingChanges[matchingChanges.length - 1];
+		const resolved = Number(lastMatch?.sortOrder ?? shift.sortOrder);
+		return Number.isFinite(resolved) && resolved > 0 ? resolved : shift.sortOrder;
+	}
+
+	function displayShiftEndDate(shift: ShiftRow): string {
+		if (activeSection !== 'shiftsWorkshop') {
+			return 'Indefinite';
+		}
+		const matchingChanges = (shift.changes ?? [])
+			.filter((change) => shiftChangeOverlapsMonth(change, shiftsWorkshopMonth))
+			.sort((a, b) => a.startDate.localeCompare(b.startDate));
+		if (matchingChanges.length === 0) return 'Indefinite';
+		const lastMatch = matchingChanges[matchingChanges.length - 1];
+		return lastMatch.endDate ?? 'Indefinite';
+	}
+
+	function clearShiftDragState() {
+		draggingShiftEmployeeTypeId = null;
+		dragOverShiftEmployeeTypeId = null;
+	}
+
+	function handleShiftDragStart(event: DragEvent, shift: ShiftRow) {
+		if (activeSection !== 'shiftsWorkshop' || isShiftReorderLoading) return;
+		draggingShiftEmployeeTypeId = shift.employeeTypeId;
+		dragOverShiftEmployeeTypeId = null;
+		if (event.dataTransfer) {
+			event.dataTransfer.effectAllowed = 'move';
+			event.dataTransfer.setData('text/plain', String(shift.employeeTypeId));
+			const handleEl = event.currentTarget as HTMLElement | null;
+			const rowEl = handleEl?.closest('tr') as HTMLElement | null;
+			if (rowEl) {
+				event.dataTransfer.setDragImage(rowEl, 24, 16);
+			}
+		}
+	}
+
+	function handleShiftDragOver(event: DragEvent, shift: ShiftRow) {
+		if (activeSection !== 'shiftsWorkshop') return;
+		if (draggingShiftEmployeeTypeId === null) return;
+		event.preventDefault();
+		if (event.dataTransfer) {
+			event.dataTransfer.dropEffect = 'move';
+		}
+		if (draggingShiftEmployeeTypeId === shift.employeeTypeId) {
+			dragOverShiftEmployeeTypeId = null;
+			return;
+		}
+		dragOverShiftEmployeeTypeId = shift.employeeTypeId;
+	}
+
+	function handleShiftDragLeave(shift: ShiftRow) {
+		if (dragOverShiftEmployeeTypeId === shift.employeeTypeId) {
+			dragOverShiftEmployeeTypeId = null;
+		}
+	}
+
+	async function handleShiftDrop(event: DragEvent, targetShift: ShiftRow) {
+		if (activeSection !== 'shiftsWorkshop') return;
+		event.preventDefault();
+		const sourceId = draggingShiftEmployeeTypeId;
+		const targetId = targetShift.employeeTypeId;
+		clearShiftDragState();
+		if (sourceId === null || sourceId === targetId || isShiftReorderLoading) return;
+
+		const sourceShift = displayedShifts.find((shift) => shift.employeeTypeId === sourceId);
+		const destinationShift = displayedShifts.find((shift) => shift.employeeTypeId === targetId);
+		if (!sourceShift || !destinationShift) return;
+		const currentIds = displayedShifts.map((shift) => shift.employeeTypeId);
+		const sourceIndex = currentIds.findIndex((id) => id === sourceId);
+		const targetIndex = currentIds.findIndex((id) => id === targetId);
+		if (sourceIndex < 0 || targetIndex < 0 || sourceIndex === targetIndex) return;
+		const [moved] = currentIds.splice(sourceIndex, 1);
+		currentIds.splice(targetIndex, 0, moved);
+
+		const effectiveStartDate = monthStartDate(shiftsWorkshopMonth);
+		if (!effectiveStartDate) {
+			addShiftActionError = 'Selected month is invalid.';
+			return;
+		}
+
+		isShiftReorderLoading = true;
+		addShiftActionError = '';
+		try {
+			const result = await fetchWithAuthRedirect(`${base}/api/team/shifts`, {
+				method: 'PATCH',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					reorderOnly: true,
+					employeeTypeId: sourceShift.employeeTypeId,
+					startDate: effectiveStartDate,
+					orderedEmployeeTypeIds: currentIds
+				})
+			});
+			if (!result) return;
+			if (!result.ok) {
+				throw new Error(await parseErrorMessage(result, 'Failed to reorder shift'));
+			}
+			await refreshDependenciesAfterMutation(['shifts', 'assignments', 'schedule']);
+		} catch (error) {
+			addShiftActionError = error instanceof Error ? error.message : 'Failed to reorder shift';
+		} finally {
+			isShiftReorderLoading = false;
+		}
 	}
 
 	async function handleAddShift() {
@@ -1994,8 +2168,10 @@
 		addShiftSortOrder = '1';
 		addShiftPatternId = '';
 		addShiftStartDate = '';
+		addShiftEndDate = '';
 		shiftPatternPickerOpen = false;
 		shiftStartDatePickerOpen = false;
+		shiftEndDatePickerOpen = false;
 		addShiftActionError = '';
 		addShiftActionLoading = false;
 		assignmentRows = [];
@@ -2588,10 +2764,39 @@
 			changes: (shift.changes ?? [])
 				.map((change) => ({
 					...change,
-					pattern: change.pattern || 'Unassigned'
+					pattern: change.pattern || 'Unassigned',
+					sortOrder: Number(change.sortOrder ?? shift.sortOrder)
 				}))
 				.sort((a, b) => a.startDate.localeCompare(b.startDate))
 		}));
+	$: displayedShifts =
+		activeSection === 'shiftsWorkshop'
+			? sortedShifts.filter((shift) => {
+					const effectiveChanges =
+						shift.changes && shift.changes.length > 0
+							? shift.changes
+							: [
+									{
+										startDate: shift.startDate,
+										endDate: null,
+										name: shift.name,
+										patternId: shift.patternId,
+										pattern: shift.pattern
+									} satisfies ShiftChangeRow
+								];
+					return effectiveChanges.some((change) =>
+						shiftChangeOverlapsMonth(change, shiftsWorkshopMonth)
+					);
+				}).sort((a, b) => {
+					const orderDiff =
+						shiftSortOrderForMonth(a, shiftsWorkshopMonth) -
+						shiftSortOrderForMonth(b, shiftsWorkshopMonth);
+					if (orderDiff !== 0) return orderDiff;
+					const nameDiff = a.name.localeCompare(b.name);
+					if (nameDiff !== 0) return nameDiff;
+					return a.employeeTypeId - b.employeeTypeId;
+				})
+			: sortedShifts;
 	$: sortedEventCodes = [...eventCodeRows].sort((a, b) => {
 		const aValue = toComparableEventCodeValue(a, eventCodeSortKey);
 		const bValue = toComparableEventCodeValue(b, eventCodeSortKey);
@@ -2688,7 +2893,11 @@
 		assignmentListShiftFilter = '';
 	}
 
-	$: if (open && activeSection === 'assignments' && assignmentsViewMode !== 'list') {
+	$: if (
+		open &&
+		(activeSection === 'assignments' || activeSection === 'assignmentsWorkshop') &&
+		assignmentsViewMode !== 'list'
+	) {
 		const bounded = adjustNumericInput(
 			assignmentSortOrder,
 			0,
@@ -2702,7 +2911,7 @@
 
 	$: if (
 		open &&
-		activeSection === 'assignments' &&
+		(activeSection === 'assignments' || activeSection === 'assignmentsWorkshop') &&
 		assignmentsViewMode === 'add' &&
 		!assignmentSortOrderManuallySet &&
 		selectedAssignmentShiftId() !== null &&
@@ -2773,7 +2982,10 @@
 	}
 
 	$: {
-		const isShiftsListVisible = open && activeSection === 'shifts' && shiftsViewMode === 'list';
+		const isShiftsListVisible =
+			open &&
+			(activeSection === 'shifts' || activeSection === 'shiftsWorkshop') &&
+			shiftsViewMode === 'list';
 		if (isShiftsListVisible && !wasShiftsListVisible) {
 			void loadTeamShifts();
 			if (!patterns.length && !patternsLoading) {
@@ -2810,7 +3022,9 @@
 
 	$: {
 		const isAssignmentsListVisible =
-			open && activeSection === 'assignments' && assignmentsViewMode === 'list';
+			open &&
+			(activeSection === 'assignments' || activeSection === 'assignmentsWorkshop') &&
+			assignmentsViewMode === 'list';
 		if (isAssignmentsListVisible && !wasAssignmentsListVisible) {
 			void loadTeamUsers();
 			void loadTeamShifts();
@@ -2853,7 +3067,11 @@
 		});
 	}
 
-	$: if (assignmentUserResultsOpen && open && activeSection === 'assignments') {
+	$: if (
+		assignmentUserResultsOpen &&
+		open &&
+		(activeSection === 'assignments' || activeSection === 'assignmentsWorkshop')
+	) {
 		assignmentUserOptions.length;
 		tick().then(() => {
 			updateAssignmentUserResultsScrollbar();
@@ -3269,10 +3487,10 @@
 									</div>
 								{/if}
 							</section>
-						{:else if activeSection === 'shifts'}
+						{:else if activeSection === 'shifts' || activeSection === 'shiftsWorkshop'}
 							<section class="setupSection">
 								<div class="usersPaneHeader">
-									<h3>Shifts</h3>
+									<h3>{activeSection === 'shiftsWorkshop' ? 'Shifts Workshop' : 'Shifts'}</h3>
 									{#if shiftsViewMode === 'list'}
 										<button
 											type="button"
@@ -3289,104 +3507,184 @@
 								</div>
 								{#if shiftsViewMode === 'list'}
 									<div class="setupCard">
+										{#if activeSection === 'shiftsWorkshop'}
+											<div class="workshopMonthPickerRow">
+												<div class="setupField workshopMonthPickerField">
+													<span class="setupFieldLabel">Month</span>
+													<DatePicker
+														id="shiftsWorkshopMonthBtn"
+														menuId="shiftsWorkshopMonthMenu"
+														label="Month"
+														depth="month"
+														value={shiftsWorkshopMonth}
+														open={shiftsWorkshopMonthPickerOpen}
+														onOpenChange={setShiftsWorkshopMonthPickerOpen}
+														on:change={(event) => (shiftsWorkshopMonth = event.detail)}
+													/>
+												</div>
+											</div>
+										{/if}
 										{#if teamShiftsLoading}
 											<p>Loading shifts...</p>
 										{:else if teamShiftsError}
 											<div class="setupActionAlert" role="alert">{teamShiftsError}</div>
-										{:else if sortedShifts.length === 0}
-											<p>No shifts yet.</p>
+										{:else if displayedShifts.length === 0}
+											<p>
+												{activeSection === 'shiftsWorkshop'
+													? 'No shifts active in the selected month.'
+													: 'No shifts yet.'}
+											</p>
 										{:else}
 											<HorizontalScrollArea>
 												<table class="setupTable">
 													<thead>
 														<tr>
-															<th aria-sort={ariaSortForShift('order')}>
-																<button
-																	type="button"
-																	class="tableSortBtn"
-																	on:click={() => toggleShiftSort('order')}
-																>
-																	Order
-																	<span
-																		class={`sortIndicator${shiftSortKey === 'order' ? ' active' : ''}`}
-																		aria-hidden="true"
+															{#if activeSection !== 'shiftsWorkshop'}
+																<th aria-sort={ariaSortForShift('order')}>
+																	<button
+																		type="button"
+																		class="tableSortBtn"
+																		on:click={() => toggleShiftSort('order')}
 																	>
-																		{shiftSortKey === 'order'
-																			? shiftSortDirection === 'asc'
-																				? '↑'
-																				: '↓'
-																			: '↕'}
-																	</span>
-																</button>
-															</th>
-															<th aria-sort={ariaSortForShift('name')}>
-																<button
-																	type="button"
-																	class="tableSortBtn"
-																	on:click={() => toggleShiftSort('name')}
-																>
-																	Shift
-																	<span
-																		class={`sortIndicator${shiftSortKey === 'name' ? ' active' : ''}`}
-																		aria-hidden="true"
+																		Order
+																		<span
+																			class={`sortIndicator${shiftSortKey === 'order' ? ' active' : ''}`}
+																			aria-hidden="true"
+																		>
+																			{shiftSortKey === 'order'
+																				? shiftSortDirection === 'asc'
+																					? '↑'
+																					: '↓'
+																				: '↕'}
+																		</span>
+																	</button>
+																</th>
+															{/if}
+															{#if activeSection === 'shiftsWorkshop'}
+																<th class="shiftHandleColHead">
+																	<span class="srOnly">Reorder</span>
+																</th>
+																<th>Shift</th>
+																<th>Pattern</th>
+																<th>Start Date</th>
+															{:else}
+																<th aria-sort={ariaSortForShift('name')}>
+																	<button
+																		type="button"
+																		class="tableSortBtn"
+																		on:click={() => toggleShiftSort('name')}
 																	>
-																		{shiftSortKey === 'name'
-																			? shiftSortDirection === 'asc'
-																				? '↑'
-																				: '↓'
-																			: '↕'}
-																	</span>
-																</button>
-															</th>
-															<th aria-sort={ariaSortForShift('pattern')}>
-																<button
-																	type="button"
-																	class="tableSortBtn"
-																	on:click={() => toggleShiftSort('pattern')}
-																>
-																	Pattern
-																	<span
-																		class={`sortIndicator${shiftSortKey === 'pattern' ? ' active' : ''}`}
-																		aria-hidden="true"
+																		Shift
+																		<span
+																			class={`sortIndicator${shiftSortKey === 'name' ? ' active' : ''}`}
+																			aria-hidden="true"
+																		>
+																			{shiftSortKey === 'name'
+																				? shiftSortDirection === 'asc'
+																					? '↑'
+																					: '↓'
+																				: '↕'}
+																		</span>
+																	</button>
+																</th>
+																<th aria-sort={ariaSortForShift('pattern')}>
+																	<button
+																		type="button"
+																		class="tableSortBtn"
+																		on:click={() => toggleShiftSort('pattern')}
 																	>
-																		{shiftSortKey === 'pattern'
-																			? shiftSortDirection === 'asc'
-																				? '↑'
-																				: '↓'
-																			: '↕'}
-																	</span>
-																</button>
-															</th>
-															<th aria-sort={ariaSortForShift('start')}>
-																<button
-																	type="button"
-																	class="tableSortBtn"
-																	on:click={() => toggleShiftSort('start')}
-																>
-																	Start Date
-																	<span
-																		class={`sortIndicator${shiftSortKey === 'start' ? ' active' : ''}`}
-																		aria-hidden="true"
+																		Pattern
+																		<span
+																			class={`sortIndicator${shiftSortKey === 'pattern' ? ' active' : ''}`}
+																			aria-hidden="true"
+																		>
+																			{shiftSortKey === 'pattern'
+																				? shiftSortDirection === 'asc'
+																					? '↑'
+																					: '↓'
+																				: '↕'}
+																		</span>
+																	</button>
+																</th>
+																<th aria-sort={ariaSortForShift('start')}>
+																	<button
+																		type="button"
+																		class="tableSortBtn"
+																		on:click={() => toggleShiftSort('start')}
 																	>
-																		{shiftSortKey === 'start'
-																			? shiftSortDirection === 'asc'
-																				? '↑'
-																				: '↓'
-																			: '↕'}
-																	</span>
-																</button>
-															</th>
+																		Start Date
+																		<span
+																			class={`sortIndicator${shiftSortKey === 'start' ? ' active' : ''}`}
+																			aria-hidden="true"
+																		>
+																			{shiftSortKey === 'start'
+																				? shiftSortDirection === 'asc'
+																					? '↑'
+																					: '↓'
+																				: '↕'}
+																		</span>
+																	</button>
+																</th>
+															{/if}
+															{#if activeSection === 'shiftsWorkshop'}
+																<th>End Date</th>
+															{/if}
 															<th>Changes</th>
 															<th></th>
 														</tr>
 													</thead>
 													<tbody>
-														{#each sortedShifts as shift}
-															<tr>
-																<td>{shift.sortOrder}</td>
+														{#each displayedShifts as shift}
+															<tr
+																class:shiftDraggingRow={activeSection === 'shiftsWorkshop' &&
+																	draggingShiftEmployeeTypeId === shift.employeeTypeId}
+																class:shiftDragTargetRow={activeSection === 'shiftsWorkshop' &&
+																	dragOverShiftEmployeeTypeId === shift.employeeTypeId &&
+																	draggingShiftEmployeeTypeId !== shift.employeeTypeId}
+																on:dragover={(event) => handleShiftDragOver(event, shift)}
+																on:drop={(event) => void handleShiftDrop(event, shift)}
+																on:dragleave={() => handleShiftDragLeave(shift)}
+															>
+																{#if activeSection !== 'shiftsWorkshop'}
+																	<td>{shift.sortOrder}</td>
+																{/if}
+																{#if activeSection === 'shiftsWorkshop'}
+																	<td class="shiftHandleCell">
+																		<button
+																			type="button"
+																			class="shiftReorderHandleBtn"
+																			class:active={
+																				draggingShiftEmployeeTypeId === shift.employeeTypeId
+																			}
+																			draggable={!isShiftReorderLoading}
+																			aria-label={`Move ${shift.name}`}
+																			title="Drag to reorder shift"
+																			on:dragstart={(event) => handleShiftDragStart(event, shift)}
+																			on:dragend={clearShiftDragState}
+																			disabled={isShiftReorderLoading}
+																		>
+																			<svg
+																				class="shiftReorderHandleIcon"
+																				viewBox="0 0 12 16"
+																				aria-hidden="true"
+																				focusable="false"
+																			>
+																				<circle cx="3" cy="3" r="1.2" />
+																				<circle cx="9" cy="3" r="1.2" />
+																				<circle cx="3" cy="8" r="1.2" />
+																				<circle cx="9" cy="8" r="1.2" />
+																				<circle cx="3" cy="13" r="1.2" />
+																				<circle cx="9" cy="13" r="1.2" />
+																			</svg>
+																		</button>
+																	</td>
+																{/if}
 																<td>{shift.name}</td>
 																<td>{shift.pattern || 'Unassigned'}</td>
 																<td>{shift.startDate}</td>
+																{#if activeSection === 'shiftsWorkshop'}
+																	<td>{displayShiftEndDate(shift)}</td>
+																{/if}
 																<td>
 																	{#if hasShiftHistoryChanges(shift)}
 																		<button
@@ -3418,7 +3716,7 @@
 															</tr>
 															{#if hasShiftHistoryChanges(shift) && expandedShiftRows.has(shift.employeeTypeId)}
 																<tr class="setupDetailsRow">
-																	<td colspan="6">
+																	<td colspan={activeSection === 'shiftsWorkshop' ? 7 : 6}>
 																		<HorizontalScrollArea>
 																			<table class="setupSubTable">
 																				<thead>
@@ -3465,6 +3763,9 @@
 													</tbody>
 												</table>
 											</HorizontalScrollArea>
+											{#if addShiftActionError}
+												<div class="setupActionAlert" role="alert">{addShiftActionError}</div>
+											{/if}
 										{/if}
 									</div>
 								{:else}
@@ -3477,107 +3778,182 @@
 												: 'Add Shift'}
 										</h4>
 										<div class="setupShiftForm">
-											<label class="setupShiftNameField">
-												Shift Name
-												<input
-													class="input"
-													type="text"
-													placeholder="e.g. Days Shift"
-													bind:value={addShiftName}
-												/>
-											</label>
-											<div class="setupField">
-												<span class="setupFieldLabel">Sort Order</span>
-												<div class="numberInputWrap">
-													<input
-														class="input numberInput"
-														type="number"
-														min="1"
-														max={shiftsViewMode === 'edit'
-															? Math.max(teamShifts.length, 1)
-															: teamShifts.length + 1}
-														step="1"
-														bind:value={addShiftSortOrder}
-													/>
-													<div class="numberStepper">
-														<button
-															type="button"
-															class="numberStepperBtn"
-															aria-label="Increase sort order"
-															on:click={() =>
-																(addShiftSortOrder = adjustNumericInput(
-																	addShiftSortOrder,
-																	1,
-																	1,
-																	shiftsViewMode === 'edit'
-																		? Math.max(teamShifts.length, 1)
-																		: teamShifts.length + 1
-																))}
-														>
-															<span class="numberStepperGlyph">▲</span>
-														</button>
-														<button
-															type="button"
-															class="numberStepperBtn"
-															aria-label="Decrease sort order"
-															on:click={() =>
-																(addShiftSortOrder = adjustNumericInput(
-																	addShiftSortOrder,
-																	-1,
-																	1,
-																	shiftsViewMode === 'edit'
-																		? Math.max(teamShifts.length, 1)
-																		: teamShifts.length + 1
-																))}
-														>
-															<span class="numberStepperGlyph">▼</span>
-														</button>
-													</div>
-												</div>
-											</div>
-											<div class="setupShiftSecondaryFields">
-												<div class="setupField">
-													<span class="setupFieldLabel">Pattern</span>
-													<div class="setupPatternPicker">
-														<Picker
-															id="shiftPatternBtn"
-															menuId="shiftPatternMenu"
-															label="Pattern"
-															items={shiftPatternItems}
-															selectedValue={addShiftPatternId}
-															selectedLabel={selectedShiftPatternLabel}
-															open={shiftPatternPickerOpen}
-															onOpenChange={setShiftPatternPickerOpen}
-															on:select={(event) => (addShiftPatternId = String(event.detail))}
+											{#if activeSection === 'shiftsWorkshop'}
+												<div class="setupShiftSecondaryFields">
+													<div class="setupField workshopDateField workshopDateFieldTransparent">
+														<span class="setupFieldLabel">Shift Name</span>
+														<input
+															class="input"
+															type="text"
+															placeholder="e.g. Days Shift"
+															bind:value={addShiftName}
 														/>
-														<select
-															class="nativeHidden"
-															aria-hidden="true"
-															tabindex="-1"
-															aria-label="Pattern"
-															bind:value={addShiftPatternId}
-														>
-															<option value="">Unassigned</option>
-															{#each patterns as pattern}
-																<option value={String(pattern.patternId)}>{pattern.name}</option>
-															{/each}
-														</select>
+													</div>
+													<div class="setupField workshopDateField workshopDateFieldTransparent">
+														<span class="setupFieldLabel">Pattern</span>
+														<div class="setupPatternPicker">
+															<Picker
+																id="shiftPatternBtn"
+																menuId="shiftPatternMenu"
+																label="Pattern"
+																items={shiftPatternItems}
+																selectedValue={addShiftPatternId}
+																selectedLabel={selectedShiftPatternLabel}
+																open={shiftPatternPickerOpen}
+																onOpenChange={setShiftPatternPickerOpen}
+																on:select={(event) => (addShiftPatternId = String(event.detail))}
+															/>
+															<select
+																class="nativeHidden"
+																aria-hidden="true"
+																tabindex="-1"
+																aria-label="Pattern"
+																bind:value={addShiftPatternId}
+															>
+																<option value="">Unassigned</option>
+																{#each patterns as pattern}
+																	<option value={String(pattern.patternId)}>{pattern.name}</option>
+																{/each}
+															</select>
+														</div>
 													</div>
 												</div>
-												<div class="setupField">
-													<span class="setupFieldLabel"
-														>{shiftsViewMode === 'edit' ? 'Change Effective' : 'Start Date'}</span
-													>
-													<DatePicker
-														id="shiftStartDateBtn"
-														menuId="shiftStartDateMenu"
-														label={shiftsViewMode === 'edit' ? 'Change Effective' : 'Start Date'}
-														value={addShiftStartDate}
-														open={shiftStartDatePickerOpen}
-														onOpenChange={setShiftStartDatePickerOpen}
-														on:change={(event) => (addShiftStartDate = event.detail)}
+											{:else}
+												<label class="setupShiftNameField">
+													Shift Name
+													<input
+														class="input"
+														type="text"
+														placeholder="e.g. Days Shift"
+														bind:value={addShiftName}
 													/>
+												</label>
+												<div class="setupField">
+													<span class="setupFieldLabel">Sort Order</span>
+													<div class="numberInputWrap">
+														<input
+															class="input numberInput"
+															type="number"
+															min="1"
+															max={shiftsViewMode === 'edit'
+																? Math.max(teamShifts.length, 1)
+																: teamShifts.length + 1}
+															step="1"
+															bind:value={addShiftSortOrder}
+														/>
+														<div class="numberStepper">
+															<button
+																type="button"
+																class="numberStepperBtn"
+																aria-label="Increase sort order"
+																on:click={() =>
+																	(addShiftSortOrder = adjustNumericInput(
+																		addShiftSortOrder,
+																		1,
+																		1,
+																		shiftsViewMode === 'edit'
+																			? Math.max(teamShifts.length, 1)
+																			: teamShifts.length + 1
+																	))}
+															>
+																<span class="numberStepperGlyph">▲</span>
+															</button>
+															<button
+																type="button"
+																class="numberStepperBtn"
+																aria-label="Decrease sort order"
+																on:click={() =>
+																	(addShiftSortOrder = adjustNumericInput(
+																		addShiftSortOrder,
+																		-1,
+																		1,
+																		shiftsViewMode === 'edit'
+																			? Math.max(teamShifts.length, 1)
+																			: teamShifts.length + 1
+																	))}
+															>
+																<span class="numberStepperGlyph">▼</span>
+															</button>
+														</div>
+													</div>
 												</div>
+											{/if}
+											<div class="setupShiftSecondaryFields">
+												{#if activeSection !== 'shiftsWorkshop'}
+													<div class="setupField">
+														<span class="setupFieldLabel">Pattern</span>
+														<div class="setupPatternPicker">
+															<Picker
+																id="shiftPatternBtn"
+																menuId="shiftPatternMenu"
+																label="Pattern"
+																items={shiftPatternItems}
+																selectedValue={addShiftPatternId}
+																selectedLabel={selectedShiftPatternLabel}
+																open={shiftPatternPickerOpen}
+																onOpenChange={setShiftPatternPickerOpen}
+																on:select={(event) => (addShiftPatternId = String(event.detail))}
+															/>
+															<select
+																class="nativeHidden"
+																aria-hidden="true"
+																tabindex="-1"
+																aria-label="Pattern"
+																bind:value={addShiftPatternId}
+															>
+																<option value="">Unassigned</option>
+																{#each patterns as pattern}
+																	<option value={String(pattern.patternId)}>{pattern.name}</option>
+																{/each}
+															</select>
+														</div>
+													</div>
+													<div class="setupField">
+														<span class="setupFieldLabel"
+															>{shiftsViewMode === 'edit' ? 'Change Effective' : 'Start Date'}</span
+														>
+														<DatePicker
+															id="shiftStartDateBtn"
+															menuId="shiftStartDateMenu"
+															label={shiftsViewMode === 'edit' ? 'Change Effective' : 'Start Date'}
+															value={addShiftStartDate}
+															open={shiftStartDatePickerOpen}
+															onOpenChange={setShiftStartDatePickerOpen}
+															on:change={(event) => (addShiftStartDate = event.detail)}
+														/>
+													</div>
+												{:else}
+													<div class="setupField workshopDateField workshopDateFieldTransparent">
+														<span class="setupFieldLabel"
+															>{shiftsViewMode === 'edit' ? 'Change Effective' : 'Start Date'}</span
+														>
+														<DatePicker
+															id="shiftStartDateBtn"
+															menuId="shiftStartDateMenu"
+															label={shiftsViewMode === 'edit' ? 'Change Effective' : 'Start Date'}
+															value={addShiftStartDate}
+															open={shiftStartDatePickerOpen}
+															onOpenChange={setShiftStartDatePickerOpen}
+															on:change={(event) => (addShiftStartDate = event.detail)}
+														/>
+													</div>
+													<div
+														class="setupField workshopDateField"
+														class:workshopDateFieldIndefinite={!addShiftEndDate.trim()}
+													>
+														<span class="setupFieldLabel">End Date</span>
+														<DatePicker
+															id="shiftEndDateBtn"
+															menuId="shiftEndDateMenu"
+															label="End Date"
+															placeholder="Indefinite"
+															value={addShiftEndDate}
+															open={shiftEndDatePickerOpen}
+															onOpenChange={setShiftEndDatePickerOpen}
+															on:change={(event) => (addShiftEndDate = event.detail)}
+														/>
+													</div>
+												{/if}
 											</div>
 										</div>
 										<div class="setupActions">
@@ -3877,10 +4253,14 @@
 									</div>
 								{/if}
 							</section>
-						{:else if activeSection === 'assignments'}
+						{:else if activeSection === 'assignments' || activeSection === 'assignmentsWorkshop'}
 							<section class="setupSection">
 								<div class="usersPaneHeader">
-									<h3>Assignments</h3>
+									<h3>
+										{activeSection === 'assignmentsWorkshop'
+											? 'Assignments Workshop'
+											: 'Assignments'}
+									</h3>
 									{#if assignmentsViewMode === 'list'}
 										<button
 											type="button"

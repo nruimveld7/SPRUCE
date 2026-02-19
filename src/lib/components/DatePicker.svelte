@@ -9,6 +9,8 @@
 		isSelected: boolean;
 		isDisabled: boolean;
 	};
+	type PickerDepth = 'day' | 'month' | 'year';
+	type ViewMode = 'days' | 'months' | 'years';
 
 	export let id = '';
 	export let menuId = '';
@@ -19,16 +21,22 @@
 	export let placeholder = 'Select date';
 	export let min = '';
 	export let max = '';
+	export let depth: PickerDepth = 'day';
 	export let onOpenChange: (next: boolean) => void = () => {};
 
 	const dispatch = createEventDispatcher<{ select: string; change: string }>();
 	const monthFormatter = new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' });
 	const monthShortFormatter = new Intl.DateTimeFormat(undefined, { month: 'short' });
-	const selectedFormatter = new Intl.DateTimeFormat(undefined, {
+	const selectedDayFormatter = new Intl.DateTimeFormat(undefined, {
 		month: 'short',
 		day: 'numeric',
 		year: 'numeric'
 	});
+	const selectedMonthFormatter = new Intl.DateTimeFormat(undefined, {
+		month: 'short',
+		year: 'numeric'
+	});
+	const selectedYearFormatter = new Intl.DateTimeFormat(undefined, { year: 'numeric' });
 	const weekdayLabels = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
 
 	let rootEl: HTMLDivElement | null = null;
@@ -36,28 +44,62 @@
 	let viewYear = 0;
 	let viewMonth = 0;
 	let yearGridDecadeStart = 0;
-	let viewMode: 'days' | 'months' | 'years' = 'days';
+	let viewMode: ViewMode = 'days';
 	let isTriggerPressed = false;
 
 	$: resolvedMenuId = menuId || `${id}-menu`;
-	$: selectedDate = parseIsoDate(value);
-	$: selectedLabel = selectedDate ? selectedFormatter.format(selectedDate) : placeholder;
+	$: selectedDate = parseValueForDepth(value, depth);
+	$: selectedLabel = formatSelectedLabel(selectedDate, depth, placeholder);
 	$: monthLabel = monthFormatter.format(new Date(viewYear, viewMonth, 1));
 	$: yearLabel = String(viewYear);
 	$: yearGridStart = yearGridDecadeStart - 1;
 	$: yearRangeLabel = `${yearGridStart} - ${yearGridStart + 11}`;
+	$: todayActionLabel =
+		depth === 'year' ? 'This year' : depth === 'month' ? 'This month' : 'Today';
 	$: dayCells = buildCalendarCells(viewYear, viewMonth, selectedDate, min, max);
-	$: monthCells = buildMonthCells(viewYear, viewMonth, min, max);
-	$: yearCells = buildYearCells(yearGridStart, viewYear, min, max);
+	$: monthCells = buildMonthCells(viewYear, viewMonth, selectedDate, min, max);
+	$: yearCells = buildYearCells(yearGridStart, viewYear, selectedDate, min, max);
 	$: {
 		if (open && !lastOpen) {
 			const base = selectedDate ?? new Date();
 			viewYear = base.getFullYear();
 			viewMonth = base.getMonth();
 			yearGridDecadeStart = decadeStartForYear(viewYear);
-			viewMode = 'days';
+			viewMode = depth === 'year' ? 'years' : depth === 'month' ? 'months' : 'days';
 		}
 		lastOpen = open;
+	}
+
+	function parseYearMonth(value: string): { year: number; month: number } | null {
+		const match = value.match(/^(\d{4})-(\d{2})(?:-(\d{2}))?$/);
+		if (!match) return null;
+		const year = Number(match[1]);
+		const monthNumber = Number(match[2]);
+		if (!Number.isInteger(year) || !Number.isInteger(monthNumber)) return null;
+		if (monthNumber < 1 || monthNumber > 12) return null;
+		if (match[3] !== undefined && !parseIsoDate(value)) return null;
+		return { year, month: monthNumber - 1 };
+	}
+
+	function parseYear(value: string): number | null {
+		const yearMatch = value.match(/^\d{4}$/);
+		if (yearMatch) {
+			return Number(yearMatch[0]);
+		}
+		const yearMonth = parseYearMonth(value);
+		return yearMonth ? yearMonth.year : null;
+	}
+
+	function parseValueForDepth(raw: string, mode: PickerDepth): Date | null {
+		const value = raw.trim();
+		if (!value) return null;
+		if (mode === 'day') return parseIsoDate(value);
+		if (mode === 'month') {
+			const parsed = parseYearMonth(value);
+			return parsed ? new Date(parsed.year, parsed.month, 1) : null;
+		}
+		const parsedYear = parseYear(value);
+		return parsedYear !== null ? new Date(parsedYear, 0, 1) : null;
 	}
 
 	function parseIsoDate(iso: string): Date | null {
@@ -85,6 +127,46 @@
 		return `${year}-${month}-${day}`;
 	}
 
+	function toIsoMonth(year: number, month: number): string {
+		return `${year}-${String(month + 1).padStart(2, '0')}`;
+	}
+
+	function toIsoYear(year: number): string {
+		return String(year);
+	}
+
+	function normalizeValueForDepth(raw: string, mode: PickerDepth): string | null {
+		const value = raw.trim();
+		if (!value) return null;
+		if (mode === 'day') {
+			const parsed = parseIsoDate(value);
+			return parsed ? toIsoDate(parsed) : null;
+		}
+		if (mode === 'month') {
+			const parsed = parseYearMonth(value);
+			return parsed ? toIsoMonth(parsed.year, parsed.month) : null;
+		}
+		const parsedYear = parseYear(value);
+		return parsedYear !== null ? toIsoYear(parsedYear) : null;
+	}
+
+	function isOutOfBounds(value: string, mode: PickerDepth, minValue: string, maxValue: string): boolean {
+		const normalized = normalizeValueForDepth(value, mode);
+		if (!normalized) return false;
+		const minNormalized = normalizeValueForDepth(minValue, mode);
+		const maxNormalized = normalizeValueForDepth(maxValue, mode);
+		if (minNormalized && normalized < minNormalized) return true;
+		if (maxNormalized && normalized > maxNormalized) return true;
+		return false;
+	}
+
+	function formatSelectedLabel(selected: Date | null, mode: PickerDepth, emptyLabel: string): string {
+		if (!selected) return emptyLabel;
+		if (mode === 'day') return selectedDayFormatter.format(selected);
+		if (mode === 'month') return selectedMonthFormatter.format(selected);
+		return selectedYearFormatter.format(selected);
+	}
+
 	function buildCalendarCells(
 		year: number,
 		month: number,
@@ -104,15 +186,13 @@
 			cellDate.setDate(firstCellDate.getDate() + index);
 			const iso = toIsoDate(cellDate);
 			const inMonth = cellDate.getMonth() === month && cellDate.getFullYear() === year;
-			const belowMin = Boolean(minValue) && iso < minValue;
-			const aboveMax = Boolean(maxValue) && iso > maxValue;
 			cells.push({
 				iso,
 				day: cellDate.getDate(),
 				inMonth,
 				isToday: iso === todayIso,
 				isSelected: iso === selectedIso,
-				isDisabled: belowMin || aboveMax
+				isDisabled: isOutOfBounds(iso, 'day', minValue, maxValue)
 			});
 		}
 
@@ -122,20 +202,31 @@
 	function buildMonthCells(
 		year: number,
 		currentMonth: number,
+		selected: Date | null,
 		minValue: string,
 		maxValue: string
-	): Array<{ monthIndex: number; label: string; isCurrent: boolean; isDisabled: boolean }> {
+	): Array<{
+		monthIndex: number;
+		label: string;
+		isCurrent: boolean;
+		isSelected: boolean;
+		isDisabled: boolean;
+	}> {
 		const cells: Array<{
 			monthIndex: number;
 			label: string;
 			isCurrent: boolean;
+			isSelected: boolean;
 			isDisabled: boolean;
 		}> = [];
+		const selectedYear = selected?.getFullYear();
+		const selectedMonth = selected?.getMonth();
 		for (let monthIndex = 0; monthIndex < 12; monthIndex += 1) {
 			cells.push({
 				monthIndex,
 				label: monthShortFormatter.format(new Date(year, monthIndex, 1)),
 				isCurrent: monthIndex === currentMonth,
+				isSelected: selectedYear === year && selectedMonth === monthIndex,
 				isDisabled: isMonthDisabled(year, monthIndex, minValue, maxValue)
 			});
 		}
@@ -143,25 +234,25 @@
 	}
 
 	function isMonthDisabled(year: number, month: number, minValue: string, maxValue: string) {
-		const monthStart = toIsoDate(new Date(year, month, 1));
-		const monthEnd = toIsoDate(new Date(year, month + 1, 0));
-		const belowMin = Boolean(minValue) && monthEnd < minValue;
-		const aboveMax = Boolean(maxValue) && monthStart > maxValue;
-		return belowMin || aboveMax;
+		return isOutOfBounds(toIsoMonth(year, month), 'month', minValue, maxValue);
 	}
 
 	function buildYearCells(
 		startYear: number,
 		currentYear: number,
+		selected: Date | null,
 		minValue: string,
 		maxValue: string
-	): Array<{ year: number; isCurrent: boolean; isDisabled: boolean }> {
-		const cells: Array<{ year: number; isCurrent: boolean; isDisabled: boolean }> = [];
+	): Array<{ year: number; isCurrent: boolean; isSelected: boolean; isDisabled: boolean }> {
+		const cells: Array<{ year: number; isCurrent: boolean; isSelected: boolean; isDisabled: boolean }> =
+			[];
+		const selectedYear = selected?.getFullYear();
 		for (let offset = 0; offset < 12; offset += 1) {
 			const year = startYear + offset;
 			cells.push({
 				year,
 				isCurrent: year === currentYear,
+				isSelected: year === selectedYear,
 				isDisabled: isYearDisabled(year, minValue, maxValue)
 			});
 		}
@@ -173,11 +264,7 @@
 	}
 
 	function isYearDisabled(year: number, minValue: string, maxValue: string) {
-		const yearStart = toIsoDate(new Date(year, 0, 1));
-		const yearEnd = toIsoDate(new Date(year, 11, 31));
-		const belowMin = Boolean(minValue) && yearEnd < minValue;
-		const aboveMax = Boolean(maxValue) && yearStart > maxValue;
-		return belowMin || aboveMax;
+		return isOutOfBounds(toIsoYear(year), 'year', minValue, maxValue);
 	}
 
 	function setOpen(next: boolean) {
@@ -201,6 +288,7 @@
 	}
 
 	function selectDate(iso: string) {
+		if (depth !== 'day') return;
 		value = iso;
 		dispatch('select', iso);
 		dispatch('change', iso);
@@ -222,6 +310,11 @@
 	}
 
 	function toggleHeaderView() {
+		if (depth === 'year') return;
+		if (depth === 'month') {
+			viewMode = viewMode === 'years' ? 'months' : 'years';
+			return;
+		}
 		if (viewMode === 'days') {
 			viewMode = 'months';
 			return;
@@ -236,10 +329,26 @@
 
 	function selectMonth(monthIndex: number) {
 		viewMonth = monthIndex;
+		if (depth === 'month') {
+			const nextValue = toIsoMonth(viewYear, monthIndex);
+			value = nextValue;
+			dispatch('select', nextValue);
+			dispatch('change', nextValue);
+			setOpen(false);
+			return;
+		}
 		viewMode = 'days';
 	}
 
 	function selectYear(year: number) {
+		if (depth === 'year') {
+			const nextValue = toIsoYear(year);
+			value = nextValue;
+			dispatch('select', nextValue);
+			dispatch('change', nextValue);
+			setOpen(false);
+			return;
+		}
 		viewYear = year;
 		yearGridDecadeStart = decadeStartForYear(year);
 		viewMode = 'months';
@@ -247,11 +356,39 @@
 
 	function selectToday() {
 		const today = new Date();
-		const iso = toIsoDate(today);
-		if ((min && iso < min) || (max && iso > max)) return;
-		viewYear = today.getFullYear();
-		viewMonth = today.getMonth();
-		selectDate(iso);
+		const todayYear = today.getFullYear();
+		const todayMonth = today.getMonth();
+		viewYear = todayYear;
+		viewMonth = todayMonth;
+		if (depth === 'day') {
+			const nextValue = toIsoDate(today);
+			if (isOutOfBounds(nextValue, 'day', min, max)) return;
+			selectDate(nextValue);
+			return;
+		}
+		if (depth === 'month') {
+			const nextValue = toIsoMonth(todayYear, todayMonth);
+			if (isOutOfBounds(nextValue, 'month', min, max)) return;
+			value = nextValue;
+			dispatch('select', nextValue);
+			dispatch('change', nextValue);
+			setOpen(false);
+			return;
+		}
+		const nextValue = toIsoYear(todayYear);
+		if (isOutOfBounds(nextValue, 'year', min, max)) return;
+		value = nextValue;
+		dispatch('select', nextValue);
+		dispatch('change', nextValue);
+		setOpen(false);
+	}
+
+	function clearSelection() {
+		if (!value) return;
+		value = '';
+		dispatch('select', '');
+		dispatch('change', '');
+		setOpen(false);
 	}
 
 	function handleDocMouseDown(event: MouseEvent) {
@@ -344,12 +481,19 @@
 				type="button"
 				class="datePickerMonthLabel datePickerHeaderLabelBtn"
 				on:click={toggleHeaderView}
-				aria-label={viewMode === 'days'
-					? 'Choose month'
-					: viewMode === 'months'
-						? 'Choose year'
-						: 'Show month selection'}
-				aria-pressed={viewMode !== 'days'}
+				aria-label={depth === 'year'
+					? 'Year selection'
+					: viewMode === 'days'
+						? 'Choose month'
+						: viewMode === 'months'
+							? 'Choose year'
+							: 'Show month selection'}
+				aria-pressed={depth === 'year'
+					? undefined
+					: depth === 'month'
+						? viewMode === 'years'
+						: viewMode !== 'days'}
+				disabled={depth === 'year'}
 			>
 				{viewMode === 'years' ? yearRangeLabel : viewMode === 'months' ? yearLabel : monthLabel}
 			</button>
@@ -378,9 +522,9 @@
 					<button
 						type="button"
 						class="datePickerYearCell"
-						class:selected={cell.isCurrent}
+						class:selected={cell.isSelected}
 						disabled={cell.isDisabled}
-						aria-current={cell.isCurrent ? 'date' : undefined}
+						aria-current={cell.isSelected ? 'date' : undefined}
 						on:click={() => selectYear(cell.year)}
 					>
 						{cell.year}
@@ -393,9 +537,9 @@
 					<button
 						type="button"
 						class="datePickerMonthCell"
-						class:selected={cell.isCurrent}
+						class:selected={cell.isSelected}
 						disabled={cell.isDisabled}
-						aria-current={cell.isCurrent ? 'date' : undefined}
+						aria-current={cell.isSelected ? 'date' : undefined}
 						on:click={() => selectMonth(cell.monthIndex)}
 					>
 						{cell.label}
@@ -429,7 +573,17 @@
 		{/if}
 
 		<div class="datePickerFooter">
-			<button type="button" class="datePickerFooterBtn" on:click={selectToday}>Today</button>
+			<button
+				type="button"
+				class="datePickerFooterBtn datePickerFooterBtnNone"
+				on:click={clearSelection}
+				disabled={!value}
+			>
+				None
+			</button>
+			<button type="button" class="datePickerFooterBtn" on:click={selectToday}>
+				{todayActionLabel}
+			</button>
 		</div>
 	</div>
 </div>

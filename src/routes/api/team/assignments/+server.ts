@@ -3,6 +3,7 @@ import type { Cookies, RequestHandler } from '@sveltejs/kit';
 import { GetPool } from '$lib/server/db';
 import { getActiveScheduleId } from '$lib/server/auth';
 import sql from 'mssql';
+import { sendShiftChangeNotification } from '$lib/server/mail/notifications';
 
 type ScheduleRole = 'Member' | 'Maintainer' | 'Manager';
 
@@ -14,6 +15,13 @@ type AssignmentRow = {
 	EndDate: Date | string | null;
 	UserName: string | null;
 	ShiftName: string | null;
+};
+
+type ShiftEmailContext = {
+	scheduleName: string;
+	scheduleThemeJson: string | null;
+	targetDisplayName: string;
+	actorDisplayName: string;
 };
 
 function cleanRequiredText(value: unknown, maxLength: number, label: string): string {
@@ -74,6 +82,73 @@ function minusOneDay(dateOnly: string): string {
 function cleanAsOfDate(value: string | null): string | null {
 	if (!value) return null;
 	return cleanDateOnly(value, 'asOf');
+}
+
+async function getShiftEmailContext(params: {
+	pool: sql.ConnectionPool;
+	scheduleId: number;
+	targetUserOid: string;
+	actorUserOid: string;
+}): Promise<ShiftEmailContext | null> {
+	const result = await params.pool
+		.request()
+		.input('scheduleId', params.scheduleId)
+		.input('targetUserOid', params.targetUserOid)
+		.input('actorUserOid', params.actorUserOid)
+		.query(
+			`SELECT TOP (1)
+				s.Name AS ScheduleName,
+				s.ThemeJson AS ScheduleThemeJson,
+				COALESCE(NULLIF(tu.DisplayName, ''), NULLIF(tu.FullName, ''), @targetUserOid) AS TargetDisplayName,
+				COALESCE(NULLIF(au.DisplayName, ''), NULLIF(au.FullName, ''), @actorUserOid) AS ActorDisplayName
+			 FROM dbo.Schedules s
+			 LEFT JOIN dbo.Users tu
+				ON tu.UserOid = @targetUserOid
+			   AND tu.DeletedAt IS NULL
+			 LEFT JOIN dbo.Users au
+				ON au.UserOid = @actorUserOid
+			   AND au.DeletedAt IS NULL
+			 WHERE s.ScheduleId = @scheduleId
+			   AND s.DeletedAt IS NULL;`
+		);
+	const row = result.recordset?.[0];
+	if (!row) return null;
+	return {
+		scheduleName: String(row.ScheduleName ?? ''),
+		scheduleThemeJson: (row.ScheduleThemeJson as string | null) ?? null,
+		targetDisplayName: String(row.TargetDisplayName ?? params.targetUserOid),
+		actorDisplayName: String(row.ActorDisplayName ?? params.actorUserOid)
+	};
+}
+
+async function getEffectiveShiftNameForDate(
+	request: sql.Request,
+	scheduleId: number,
+	userOid: string,
+	date: string
+): Promise<string> {
+	const result = await request
+		.input('scheduleId', scheduleId)
+		.input('userOid', userOid)
+		.input('date', date)
+		.query(
+			`SELECT TOP (1)
+				COALESCE(NULLIF(et.Name, ''), 'Unknown shift') AS ShiftName
+			 FROM dbo.ScheduleUserTypes sut
+			 LEFT JOIN dbo.EmployeeTypes et
+				ON et.ScheduleId = sut.ScheduleId
+			   AND et.EmployeeTypeId = sut.EmployeeTypeId
+			   AND et.IsActive = 1
+			   AND et.DeletedAt IS NULL
+			 WHERE sut.ScheduleId = @scheduleId
+			   AND sut.UserOid = @userOid
+			   AND sut.IsActive = 1
+			   AND sut.DeletedAt IS NULL
+			   AND sut.StartDate <= @date
+			   AND (sut.EndDate IS NULL OR sut.EndDate >= @date)
+			 ORDER BY sut.StartDate DESC;`
+		);
+	return String(result.recordset?.[0]?.ShiftName ?? 'Unassigned');
 }
 
 async function getActorContext(localsUserOid: string, cookies: Cookies) {
@@ -476,6 +551,12 @@ async function upsertAssignment({
 	try {
 		await ensureAssignmentReferencesValid(tx, scheduleId, userOid, employeeTypeId);
 		await normalizeAssignmentOrder(tx, scheduleId);
+		const previousShift = await getEffectiveShiftNameForDate(
+			new sql.Request(tx),
+			scheduleId,
+			userOid,
+			startDate
+		);
 
 		if (mode === 'history') {
 			if (!historyStartDate) {
@@ -704,7 +785,34 @@ async function upsertAssignment({
 					await updatePreviousWindow();
 					await updateCurrentWindow();
 				}
+			const newShift = await getEffectiveShiftNameForDate(
+				new sql.Request(tx),
+				scheduleId,
+				userOid,
+				startDate
+			);
 			await tx.commit();
+			const emailContext = await getShiftEmailContext({
+				pool,
+				scheduleId,
+				targetUserOid: userOid,
+				actorUserOid: actorOid
+			});
+			if (emailContext) {
+				try {
+					await sendShiftChangeNotification({
+						scheduleName: emailContext.scheduleName,
+						themeJson: emailContext.scheduleThemeJson,
+						targetMemberName: emailContext.targetDisplayName,
+						date: startDate,
+						previousShift,
+						newShift,
+						triggeringUserName: emailContext.actorDisplayName
+					});
+				} catch (notificationError) {
+					console.error('Shift change notification failed:', notificationError);
+				}
+			}
 			return json({ success: true });
 		}
 
@@ -750,7 +858,34 @@ async function upsertAssignment({
 			sortOrder: targetSortOrder
 		});
 
+		const newShift = await getEffectiveShiftNameForDate(
+			new sql.Request(tx),
+			scheduleId,
+			userOid,
+			startDate
+		);
 		await tx.commit();
+		const emailContext = await getShiftEmailContext({
+			pool,
+			scheduleId,
+			targetUserOid: userOid,
+			actorUserOid: actorOid
+		});
+		if (emailContext) {
+			try {
+				await sendShiftChangeNotification({
+					scheduleName: emailContext.scheduleName,
+					themeJson: emailContext.scheduleThemeJson,
+					targetMemberName: emailContext.targetDisplayName,
+					date: startDate,
+					previousShift,
+					newShift,
+					triggeringUserName: emailContext.actorDisplayName
+				});
+			} catch (notificationError) {
+				console.error('Shift change notification failed:', notificationError);
+			}
+		}
 	} catch (e) {
 		try {
 			await tx.rollback();
@@ -840,7 +975,7 @@ export const DELETE: RequestHandler = async ({ locals, cookies, request }) => {
 		const serverDateResult = await new sql.Request(tx).query(
 			`SELECT CONVERT(date, SYSUTCDATETIME()) AS Today;`
 		);
-		const today = String(serverDateResult.recordset?.[0]?.Today ?? '').slice(0, 10);
+		const today = toDateOnly(serverDateResult.recordset?.[0]?.Today) ?? '';
 		if (!today) {
 			throw error(500, 'Could not resolve current server date');
 		}

@@ -4,6 +4,10 @@ import { GetPool } from '$lib/server/db';
 import { getActiveScheduleId } from '$lib/server/auth';
 import sql from 'mssql';
 import type { Cookies } from '@sveltejs/kit';
+import {
+	sendAccessGrantedNotification,
+	sendAccessRemovedNotification
+} from '$lib/server/mail/notifications';
 
 type ScheduleRole = 'Member' | 'Maintainer' | 'Manager';
 
@@ -40,6 +44,13 @@ type ConfirmRemovalPayload = {
 	confirmActiveAssignmentRemoval?: boolean;
 };
 
+type AccessEmailContext = {
+	scheduleName: string;
+	scheduleThemeJson: string | null;
+	targetDisplayName: string;
+	actorDisplayName: string;
+};
+
 function assertRole(role: unknown): ScheduleRole {
 	if (role === 'Member' || role === 'Maintainer' || role === 'Manager') {
 		return role;
@@ -52,6 +63,13 @@ function cleanOptionalText(value: unknown, maxLength: number): string | null {
 	const trimmed = value.trim();
 	if (!trimmed) return null;
 	return trimmed.slice(0, maxLength);
+}
+
+function toDateOnly(value: Date | string | null | undefined): string {
+	if (!value) return '';
+	if (value instanceof Date) return value.toISOString().slice(0, 10);
+	if (typeof value === 'string') return value.slice(0, 10);
+	return '';
 }
 
 async function getActorContext(localsUserOid: string, cookies: Cookies) {
@@ -140,6 +158,43 @@ async function countManagers(request: sql.Request, scheduleId: number): Promise<
 
 function cleanBoolean(value: unknown): boolean {
 	return value === true;
+}
+
+async function getAccessEmailContext(params: {
+	pool: sql.ConnectionPool;
+	scheduleId: number;
+	targetUserOid: string;
+	actorUserOid: string;
+}): Promise<AccessEmailContext | null> {
+	const result = await params.pool
+		.request()
+		.input('scheduleId', params.scheduleId)
+		.input('targetUserOid', params.targetUserOid)
+		.input('actorUserOid', params.actorUserOid)
+		.query(
+			`SELECT TOP (1)
+				s.Name AS ScheduleName,
+				s.ThemeJson AS ScheduleThemeJson,
+				COALESCE(NULLIF(tu.DisplayName, ''), NULLIF(tu.FullName, ''), @targetUserOid) AS TargetDisplayName,
+				COALESCE(NULLIF(au.DisplayName, ''), NULLIF(au.FullName, ''), @actorUserOid) AS ActorDisplayName
+			 FROM dbo.Schedules s
+			 LEFT JOIN dbo.Users tu
+				ON tu.UserOid = @targetUserOid
+			   AND tu.DeletedAt IS NULL
+			 LEFT JOIN dbo.Users au
+				ON au.UserOid = @actorUserOid
+			   AND au.DeletedAt IS NULL
+			 WHERE s.ScheduleId = @scheduleId
+			   AND s.DeletedAt IS NULL;`
+		);
+	const row = result.recordset?.[0];
+	if (!row) return null;
+	return {
+		scheduleName: String(row.ScheduleName ?? ''),
+		scheduleThemeJson: (row.ScheduleThemeJson as string | null) ?? null,
+		targetDisplayName: String(row.TargetDisplayName ?? params.targetUserOid),
+		actorDisplayName: String(row.ActorDisplayName ?? params.actorUserOid)
+	};
 }
 
 function assertCanManageRoleChanges(actor: ActorContext, currentRole: ScheduleRole | null, nextRole: ScheduleRole) {
@@ -311,6 +366,26 @@ export const POST: RequestHandler = async ({ locals, cookies, request }) => {
 			);
 
 		await tx.commit();
+
+		const emailContext = await getAccessEmailContext({
+			pool,
+			scheduleId: ctx.scheduleId,
+			targetUserOid,
+			actorUserOid: ctx.userOid
+		});
+		if (emailContext) {
+			try {
+				await sendAccessGrantedNotification({
+					scheduleName: emailContext.scheduleName,
+					themeJson: emailContext.scheduleThemeJson,
+					targetMemberName: emailContext.targetDisplayName,
+					authorizedByName: emailContext.actorDisplayName
+				});
+			} catch (notificationError) {
+				console.error('Access granted notification failed:', notificationError);
+			}
+		}
+
 		return json({ ok: true });
 	} catch (e) {
 		await tx.rollback();
@@ -443,7 +518,7 @@ export const DELETE: RequestHandler = async ({ locals, cookies, request }) => {
 		const serverDateResult = await new sql.Request(tx).query(
 			`SELECT CONVERT(date, SYSUTCDATETIME()) AS Today;`
 		);
-		const today = String(serverDateResult.recordset?.[0]?.Today ?? '').slice(0, 10);
+		const today = toDateOnly(serverDateResult.recordset?.[0]?.Today);
 		if (!today) {
 			throw error(500, 'Could not resolve current server date');
 		}
@@ -586,13 +661,37 @@ export const DELETE: RequestHandler = async ({ locals, cookies, request }) => {
 		}
 
 		await tx.commit();
+
+		const emailContext = await getAccessEmailContext({
+			pool,
+			scheduleId: ctx.scheduleId,
+			targetUserOid,
+			actorUserOid: ctx.userOid
+		});
+		if (emailContext) {
+			try {
+				await sendAccessRemovedNotification({
+					scheduleName: emailContext.scheduleName,
+					themeJson: emailContext.scheduleThemeJson,
+					targetMemberName: emailContext.targetDisplayName,
+					triggeringUserName: emailContext.actorDisplayName
+				});
+			} catch (notificationError) {
+				console.error('Access removed notification failed:', notificationError);
+			}
+		}
+
 		return json({
 			ok: true,
 			removalMode,
 			endedActiveAssignments: activeAssignmentCount > 0
 		});
 	} catch (e) {
-		await tx.rollback();
+		try {
+			await tx.rollback();
+		} catch {
+			// Preserve the original SQL error when SQL Server already aborted the transaction.
+		}
 		throw e;
 	}
 };

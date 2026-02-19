@@ -695,24 +695,6 @@ export const DELETE: RequestHandler = async ({ locals, cookies, request }) => {
 		);
 	}
 
-	// Never used by any shift: remove permanently.
-	if (shiftUsageCount <= 0) {
-		await pool
-			.request()
-			.input('scheduleId', scheduleId)
-			.input('patternId', patternId)
-			.query(
-				`DELETE p
-				 FROM dbo.Patterns p
-				 WHERE p.ScheduleId = @scheduleId
-				   AND p.PatternId = @patternId
-				   AND p.IsActive = 1
-				   AND p.DeletedAt IS NULL;`
-			);
-
-		return json({ ok: true, mode: 'hard-delete' });
-	}
-
 	const transaction = new sql.Transaction(pool);
 	await transaction.begin();
 	try {
@@ -911,6 +893,8 @@ export const DELETE: RequestHandler = async ({ locals, cookies, request }) => {
 			.query(
 				`UPDATE dbo.Patterns
 				 SET IsActive = 0,
+					 DeletedAt = SYSUTCDATETIME(),
+					 DeletedBy = @actorUserOid,
 					 UpdatedAt = SYSUTCDATETIME(),
 					 UpdatedBy = @actorUserOid
 				 WHERE ScheduleId = @scheduleId

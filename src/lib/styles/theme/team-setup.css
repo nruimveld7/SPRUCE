@@ -202,6 +202,14 @@
   gap: 12px;
 }
 
+.workshopMonthPickerRow {
+  margin-bottom: 12px;
+}
+
+.workshopMonthPickerField {
+  max-width: 260px;
+}
+
 .setupGrid label,
 .setupField,
 .roleFieldset {
@@ -224,6 +232,33 @@
 .setupFieldHint {
   font-size: 12px;
   color: var(--muted);
+}
+
+.workshopDateField {
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 10px;
+  min-width: 0;
+}
+
+.workshopDateFieldTransparent {
+  border-color: transparent;
+}
+
+.workshopDateFieldIndefinite {
+  border: 1px dashed rgba(160, 160, 160, 0.8);
+  background: rgba(120, 120, 120, 0.16);
+}
+
+.workshopDateFieldIndefinite :is(.datePickerBtn, .pickerBtn) {
+  border-color: rgba(160, 160, 160, 0.85);
+  background: rgba(135, 135, 135, 0.18);
+  color: rgba(228, 228, 228, 0.95);
+}
+
+.workshopDateFieldIndefinite :is(.datePickerBtn, .pickerBtn):hover {
+  border-color: rgba(180, 180, 180, 0.95);
+  background: rgba(145, 145, 145, 0.26);
 }
 
 .roleFieldset {
@@ -512,6 +547,86 @@ button.setupUserComboItem:hover {
   border-color: var(--interactive-border-hover);
 }
 
+.shiftHandleColHead,
+.shiftHandleCell {
+  width: 30px;
+  min-width: 30px;
+  max-width: 30px;
+  padding-left: 4px;
+  padding-right: 4px;
+}
+
+.shiftHandleCell {
+  text-align: center;
+}
+
+.shiftReorderHandleBtn {
+  appearance: none;
+  border: 1px solid var(--interactive-border);
+  border-radius: 6px;
+  background: var(--interactive-bg);
+  color: var(--muted);
+  width: 18px;
+  height: 28px;
+  padding: 0;
+  cursor: grab;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease,
+    box-shadow 0.12s ease;
+}
+
+.shiftReorderHandleIcon {
+  width: 8px;
+  height: 14px;
+  fill: currentColor;
+  pointer-events: none;
+}
+
+.shiftReorderHandleBtn:focus-visible {
+  outline: none;
+  border-color: var(--border-accent-focus);
+  box-shadow: 0 0 0 1px var(--border-accent-focus);
+}
+
+.shiftReorderHandleBtn:hover {
+  border-color: var(--interactive-border-hover);
+  background: var(--interactive-bg-hover);
+  color: var(--text);
+  box-shadow: var(--shadow-soft);
+}
+
+.shiftReorderHandleBtn:active,
+.shiftReorderHandleBtn.active {
+  cursor: grabbing;
+  color: #ffffff;
+  border-color: var(--border-accent-medium);
+  background: linear-gradient(180deg, var(--accent-2), var(--accent-3));
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.shiftReorderHandleBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  color: rgba(180, 186, 198, 0.65);
+}
+
+.shiftDragTargetRow td {
+  background: rgba(120, 140, 180, 0.14);
+}
+
+.shiftDragTargetRow .shiftHandleCell {
+  box-shadow: inset 3px 0 0 var(--border-accent-medium);
+}
+
+.shiftDraggingRow td {
+  opacity: 0.82;
+}
+
 .setupDetailsRow td {
   background: rgba(255, 255, 255, 0.02);
 }
@@ -674,20 +789,20 @@ button.setupUserComboItem:hover {
 }
 
 .patternEditorCard {
-  --swatch-1-color: #00c1ff;
-  --swatch-1-rgb: 0, 193, 255;
-  --swatch-1-border: rgba(0, 193, 255, 0.62);
-  --swatch-1-strong-top: rgba(0, 193, 255, 0.46);
-  --swatch-1-strong-bottom: rgba(0, 136, 204, 0.26);
-  --swatch-1-light-top: rgba(0, 193, 255, 0.24);
-  --swatch-1-light-bottom: rgba(0, 136, 204, 0.14);
-  --swatch-2-color: #ffb000;
-  --swatch-2-rgb: 255, 176, 0;
-  --swatch-2-border: rgba(255, 176, 0, 0.62);
-  --swatch-2-strong-top: rgba(255, 176, 0, 0.46);
-  --swatch-2-strong-bottom: rgba(255, 176, 0, 0.26);
-  --swatch-2-light-top: rgba(255, 176, 0, 0.24);
-  --swatch-2-light-bottom: rgba(255, 176, 0, 0.14);
+  --swatch-1-color: #ffb000;
+  --swatch-1-rgb: 255, 176, 0;
+  --swatch-1-border: rgba(255, 176, 0, 0.62);
+  --swatch-1-strong-top: rgba(255, 176, 0, 0.46);
+  --swatch-1-strong-bottom: rgba(255, 176, 0, 0.26);
+  --swatch-1-light-top: rgba(255, 176, 0, 0.24);
+  --swatch-1-light-bottom: rgba(255, 176, 0, 0.14);
+  --swatch-2-color: #00c1ff;
+  --swatch-2-rgb: 0, 193, 255;
+  --swatch-2-border: rgba(0, 193, 255, 0.62);
+  --swatch-2-strong-top: rgba(0, 193, 255, 0.46);
+  --swatch-2-strong-bottom: rgba(0, 136, 204, 0.26);
+  --swatch-2-light-top: rgba(0, 193, 255, 0.24);
+  --swatch-2-light-bottom: rgba(0, 136, 204, 0.14);
   --swatch-3-color: #22c55e;
   --swatch-3-rgb: 34, 197, 94;
   --swatch-3-border: rgba(34, 197, 94, 0.62);
@@ -1128,15 +1243,95 @@ button.setupUserComboItem:hover {
   gap: 8px;
 }
 
-.managerThemeSectionSwitch {
+.managerThemesSection {
   margin-top: 12px;
+}
+
+.managerThemesContainer {
+  border: 1px solid var(--grid-2);
+  border-radius: 12px;
+  background: var(--panel-bg);
+  overflow: hidden;
+}
+
+.managerThemesContainer.expanded {
+  border-color: var(--interactive-border-hover);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+}
+
+.managerThemesCollapseBtn {
+  width: 100%;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 850;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 10px 12px;
+}
+
+.managerThemesCollapseBtn:hover {
+  background: var(--interactive-bg-hover);
+}
+
+.managerThemesContent {
+  border-top: 1px solid var(--grid-2);
+  padding: 10px 12px 12px;
+}
+
+.managerThemesChevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 14px;
+  color: var(--muted);
+}
+
+.managerThemeSectionSwitch {
+  margin-top: 0;
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
+}
+
+.managerThemeQuickActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.managerThemeDefaultBtn:disabled,
+.managerThemeDefaultBtn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: rgba(128, 132, 142, 0.18);
+  border-color: rgba(128, 132, 142, 0.45);
+  color: rgba(205, 210, 220, 0.62);
+  box-shadow: none;
+}
+
+.managerThemeRevertBtn {
+  margin-left: 0;
+}
+
+.managerThemeRevertBtn:disabled,
+.managerThemeRevertBtn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: rgba(128, 132, 142, 0.18);
+  border-color: rgba(128, 132, 142, 0.45);
+  color: rgba(205, 210, 220, 0.62);
+  box-shadow: none;
+}
+
+.managerThemeRevertBtn.dirty:not(:disabled) {
+  border-color: var(--interactive-border-hover);
 }
 
 .managerThemeTableWrap {
-  margin-top: 12px;
+  margin-top: 10px;
   border: 1px solid var(--grid-2);
   border-radius: 12px;
   overflow: visible;
@@ -1220,6 +1415,7 @@ button.setupUserComboItem:hover {
 
 .managerCustomizationActions {
   margin-top: 14px;
+  justify-content: center;
 }
 
 .managerCreateScheduleBtn {
@@ -1233,11 +1429,65 @@ button.setupUserComboItem:hover {
   box-shadow: none;
 }
 
+.managerSaveBtn {
+  width: 50%;
+  min-width: 0;
+  min-height: 34px;
+  padding: 6px 10px;
+  display: inline-flex;
+  justify-content: center;
+}
+
+.managerSaveBtn:disabled,
+.managerSaveBtn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: rgba(128, 132, 142, 0.18);
+  border-color: rgba(128, 132, 142, 0.45);
+  color: rgba(205, 210, 220, 0.62);
+  box-shadow: none;
+  filter: none;
+}
+
+.managerSaveBtn:disabled:hover,
+.managerSaveBtn[disabled]:hover {
+  background: rgba(128, 132, 142, 0.18);
+  border-color: rgba(128, 132, 142, 0.45);
+  color: rgba(205, 210, 220, 0.62);
+  box-shadow: none;
+  filter: none;
+}
+
 .managerStatusMessage {
   margin: 8px 0 0;
   color: var(--muted);
   font-size: 12px;
   font-weight: 700;
+  text-align: center;
+}
+
+.managerStatusMessageSuccess {
+  color: rgba(164, 243, 199, 0.98);
+}
+
+.managerStatusMessageError {
+  color: var(--alert-text);
+}
+
+.managerStatusMessageInfo {
+  color: var(--muted);
+}
+
+.setupSection p.managerStatusMessageSuccess {
+  color: rgba(164, 243, 199, 0.98);
+}
+
+.setupSection p.managerStatusMessageError {
+  color: var(--alert-text);
+}
+
+.setupSection p.managerStatusMessageInfo {
+  color: var(--muted);
 }
 
 .userSummaryCard {

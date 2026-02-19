@@ -322,110 +322,6 @@ BEGIN
     EXEC(N'ALTER TABLE dbo.Patterns ALTER COLUMN PatternSummary nvarchar(100) NOT NULL;');
 END;
 
--- Pattern JSON contract:
--- {
---   "swatches": [
---     { "swatchIndex": 0, "color": "#RRGGBB", "onDays": [1, 2, ...] }
---   ],
---   "noneSwatch": { "code": "NONE" }
--- }
-IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Patterns') AND name = 'PatternJson')
-BEGIN
-    DECLARE @InvalidPatterns TABLE (PatternId int NOT NULL PRIMARY KEY);
-
-    INSERT INTO @InvalidPatterns (PatternId)
-    SELECT p.PatternId
-    FROM dbo.Patterns p
-    WHERE
-        ISJSON(p.PatternJson) <> 1
-        OR JSON_QUERY(p.PatternJson, '$.swatches') IS NULL
-        OR JSON_QUERY(p.PatternJson, '$.swatches[4]') IS NOT NULL
-        OR (JSON_QUERY(p.PatternJson, '$.swatches[0]') IS NOT NULL
-            AND (JSON_VALUE(p.PatternJson, '$.swatches[0].color') IS NULL
-                 OR JSON_QUERY(p.PatternJson, '$.swatches[0].onDays') IS NULL))
-        OR (JSON_QUERY(p.PatternJson, '$.swatches[1]') IS NOT NULL
-            AND (JSON_VALUE(p.PatternJson, '$.swatches[1].color') IS NULL
-                 OR JSON_QUERY(p.PatternJson, '$.swatches[1].onDays') IS NULL))
-        OR (JSON_QUERY(p.PatternJson, '$.swatches[2]') IS NOT NULL
-            AND (JSON_VALUE(p.PatternJson, '$.swatches[2].color') IS NULL
-                 OR JSON_QUERY(p.PatternJson, '$.swatches[2].onDays') IS NULL))
-        OR (JSON_QUERY(p.PatternJson, '$.swatches[3]') IS NOT NULL
-            AND (JSON_VALUE(p.PatternJson, '$.swatches[3].color') IS NULL
-                 OR JSON_QUERY(p.PatternJson, '$.swatches[3].onDays') IS NULL))
-        OR (
-            JSON_VALUE(p.PatternJson, '$.noneSwatch.code') IS NOT NULL
-            AND UPPER(JSON_VALUE(p.PatternJson, '$.noneSwatch.code')) <> 'NONE'
-        );
-
-    UPDATE et
-       SET PatternId = NULL,
-           UpdatedAt = SYSUTCDATETIME(),
-           UpdatedBy = COALESCE(et.UpdatedBy, 'schema')
-    FROM dbo.EmployeeTypes et
-    INNER JOIN @InvalidPatterns ip
-            ON ip.PatternId = et.PatternId
-    WHERE et.PatternId IS NOT NULL;
-
-    DELETE p
-    FROM dbo.Patterns p
-    INNER JOIN @InvalidPatterns ip
-            ON ip.PatternId = p.PatternId;
-
-    UPDATE dbo.Patterns
-       SET PatternJson = JSON_MODIFY(PatternJson, '$.noneSwatch', JSON_QUERY('{"code":"NONE"}'))
-     WHERE ISJSON(PatternJson) = 1
-       AND JSON_QUERY(PatternJson, '$.swatches') IS NOT NULL
-       AND JSON_VALUE(PatternJson, '$.noneSwatch.code') IS NULL;
-END;
-
-IF OBJECT_ID('dbo.CK_Patterns_PatternJson_Swatches', 'C') IS NOT NULL
-BEGIN
-    ALTER TABLE dbo.Patterns DROP CONSTRAINT CK_Patterns_PatternJson_Swatches;
-END;
-
-ALTER TABLE dbo.Patterns
-ADD CONSTRAINT CK_Patterns_PatternJson_Swatches CHECK (
-    ISJSON(PatternJson) = 1
-    AND JSON_QUERY(PatternJson, '$.swatches') IS NOT NULL
-    AND JSON_QUERY(PatternJson, '$.swatches[4]') IS NULL
-    AND (JSON_QUERY(PatternJson, '$.swatches[0]') IS NULL
-         OR (JSON_VALUE(PatternJson, '$.swatches[0].color') IS NOT NULL
-             AND JSON_QUERY(PatternJson, '$.swatches[0].onDays') IS NOT NULL))
-    AND (JSON_QUERY(PatternJson, '$.swatches[1]') IS NULL
-         OR (JSON_VALUE(PatternJson, '$.swatches[1].color') IS NOT NULL
-             AND JSON_QUERY(PatternJson, '$.swatches[1].onDays') IS NOT NULL))
-    AND (JSON_QUERY(PatternJson, '$.swatches[2]') IS NULL
-         OR (JSON_VALUE(PatternJson, '$.swatches[2].color') IS NOT NULL
-             AND JSON_QUERY(PatternJson, '$.swatches[2].onDays') IS NOT NULL))
-    AND (JSON_QUERY(PatternJson, '$.swatches[3]') IS NULL
-         OR (JSON_VALUE(PatternJson, '$.swatches[3].color') IS NOT NULL
-             AND JSON_QUERY(PatternJson, '$.swatches[3].onDays') IS NOT NULL))
-    AND (
-        JSON_VALUE(PatternJson, '$.noneSwatch.code') IS NULL
-        OR UPPER(JSON_VALUE(PatternJson, '$.noneSwatch.code')) = 'NONE'
-    )
-);
-
-IF OBJECT_ID('dbo.CK_Patterns_Name_NotBlank', 'C') IS NULL
-BEGIN
-    ALTER TABLE dbo.Patterns
-    ADD CONSTRAINT CK_Patterns_Name_NotBlank CHECK (LEN(LTRIM(RTRIM(Name))) > 0);
-END;
-
-IF OBJECT_ID('dbo.CK_Patterns_Summary_NotBlank', 'C') IS NULL
-BEGIN
-    EXEC(N'
-        ALTER TABLE dbo.Patterns
-        ADD CONSTRAINT CK_Patterns_Summary_NotBlank CHECK (LEN(LTRIM(RTRIM(PatternSummary))) > 0);
-    ');
-END;
-
-IF COL_LENGTH('dbo.Patterns', 'PatternNameNormalized') IS NULL
-BEGIN
-    ALTER TABLE dbo.Patterns
-    ADD PatternNameNormalized AS UPPER(LTRIM(RTRIM(Name))) PERSISTED;
-END;
-
 IF OBJECT_ID('dbo.EmployeeTypes', 'U') IS NULL
 BEGIN
     CREATE TABLE dbo.EmployeeTypes (
@@ -517,6 +413,113 @@ BEGIN
     WHERE IsActive = 1 AND DeletedAt IS NULL;
 END;
 
+-- Pattern JSON contract:
+-- {
+--   "swatches": [
+--     { "swatchIndex": 0, "color": "#RRGGBB", "onDays": [1, 2, ...] }
+--   ],
+--   "noneSwatch": { "code": "NONE" }
+-- }
+IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Patterns') AND name = 'PatternJson')
+BEGIN
+    DECLARE @InvalidPatterns TABLE (PatternId int NOT NULL PRIMARY KEY);
+
+    INSERT INTO @InvalidPatterns (PatternId)
+    SELECT p.PatternId
+    FROM dbo.Patterns p
+    WHERE
+        ISJSON(p.PatternJson) <> 1
+        OR JSON_QUERY(p.PatternJson, '$.swatches') IS NULL
+        OR JSON_QUERY(p.PatternJson, '$.swatches[4]') IS NOT NULL
+        OR (JSON_QUERY(p.PatternJson, '$.swatches[0]') IS NOT NULL
+            AND (JSON_VALUE(p.PatternJson, '$.swatches[0].color') IS NULL
+                 OR JSON_QUERY(p.PatternJson, '$.swatches[0].onDays') IS NULL))
+        OR (JSON_QUERY(p.PatternJson, '$.swatches[1]') IS NOT NULL
+            AND (JSON_VALUE(p.PatternJson, '$.swatches[1].color') IS NULL
+                 OR JSON_QUERY(p.PatternJson, '$.swatches[1].onDays') IS NULL))
+        OR (JSON_QUERY(p.PatternJson, '$.swatches[2]') IS NOT NULL
+            AND (JSON_VALUE(p.PatternJson, '$.swatches[2].color') IS NULL
+                 OR JSON_QUERY(p.PatternJson, '$.swatches[2].onDays') IS NULL))
+        OR (JSON_QUERY(p.PatternJson, '$.swatches[3]') IS NOT NULL
+            AND (JSON_VALUE(p.PatternJson, '$.swatches[3].color') IS NULL
+                 OR JSON_QUERY(p.PatternJson, '$.swatches[3].onDays') IS NULL))
+        OR (
+            JSON_VALUE(p.PatternJson, '$.noneSwatch.code') IS NOT NULL
+            AND UPPER(JSON_VALUE(p.PatternJson, '$.noneSwatch.code')) <> 'NONE'
+        );
+
+    IF OBJECT_ID('dbo.EmployeeTypes', 'U') IS NOT NULL
+    BEGIN
+        UPDATE et
+           SET PatternId = NULL,
+               UpdatedAt = SYSUTCDATETIME(),
+               UpdatedBy = COALESCE(et.UpdatedBy, 'schema')
+        FROM dbo.EmployeeTypes et
+        INNER JOIN @InvalidPatterns ip
+                ON ip.PatternId = et.PatternId
+        WHERE et.PatternId IS NOT NULL;
+    END;
+
+    DELETE p
+    FROM dbo.Patterns p
+    INNER JOIN @InvalidPatterns ip
+            ON ip.PatternId = p.PatternId;
+
+    UPDATE dbo.Patterns
+       SET PatternJson = JSON_MODIFY(PatternJson, '$.noneSwatch', JSON_QUERY('{"code":"NONE"}'))
+     WHERE ISJSON(PatternJson) = 1
+       AND JSON_QUERY(PatternJson, '$.swatches') IS NOT NULL
+       AND JSON_VALUE(PatternJson, '$.noneSwatch.code') IS NULL;
+END;
+
+IF OBJECT_ID('dbo.CK_Patterns_PatternJson_Swatches', 'C') IS NOT NULL
+BEGIN
+    ALTER TABLE dbo.Patterns DROP CONSTRAINT CK_Patterns_PatternJson_Swatches;
+END;
+
+ALTER TABLE dbo.Patterns
+ADD CONSTRAINT CK_Patterns_PatternJson_Swatches CHECK (
+    ISJSON(PatternJson) = 1
+    AND JSON_QUERY(PatternJson, '$.swatches') IS NOT NULL
+    AND JSON_QUERY(PatternJson, '$.swatches[4]') IS NULL
+    AND (JSON_QUERY(PatternJson, '$.swatches[0]') IS NULL
+         OR (JSON_VALUE(PatternJson, '$.swatches[0].color') IS NOT NULL
+             AND JSON_QUERY(PatternJson, '$.swatches[0].onDays') IS NOT NULL))
+    AND (JSON_QUERY(PatternJson, '$.swatches[1]') IS NULL
+         OR (JSON_VALUE(PatternJson, '$.swatches[1].color') IS NOT NULL
+             AND JSON_QUERY(PatternJson, '$.swatches[1].onDays') IS NOT NULL))
+    AND (JSON_QUERY(PatternJson, '$.swatches[2]') IS NULL
+         OR (JSON_VALUE(PatternJson, '$.swatches[2].color') IS NOT NULL
+             AND JSON_QUERY(PatternJson, '$.swatches[2].onDays') IS NOT NULL))
+    AND (JSON_QUERY(PatternJson, '$.swatches[3]') IS NULL
+         OR (JSON_VALUE(PatternJson, '$.swatches[3].color') IS NOT NULL
+             AND JSON_QUERY(PatternJson, '$.swatches[3].onDays') IS NOT NULL))
+    AND (
+        JSON_VALUE(PatternJson, '$.noneSwatch.code') IS NULL
+        OR UPPER(JSON_VALUE(PatternJson, '$.noneSwatch.code')) = 'NONE'
+    )
+);
+
+IF OBJECT_ID('dbo.CK_Patterns_Name_NotBlank', 'C') IS NULL
+BEGIN
+    ALTER TABLE dbo.Patterns
+    ADD CONSTRAINT CK_Patterns_Name_NotBlank CHECK (LEN(LTRIM(RTRIM(Name))) > 0);
+END;
+
+IF OBJECT_ID('dbo.CK_Patterns_Summary_NotBlank', 'C') IS NULL
+BEGIN
+    EXEC(N'
+        ALTER TABLE dbo.Patterns
+        ADD CONSTRAINT CK_Patterns_Summary_NotBlank CHECK (LEN(LTRIM(RTRIM(PatternSummary))) > 0);
+    ');
+END;
+
+IF COL_LENGTH('dbo.Patterns', 'PatternNameNormalized') IS NULL
+BEGIN
+    ALTER TABLE dbo.Patterns
+    ADD PatternNameNormalized AS UPPER(LTRIM(RTRIM(Name))) PERSISTED;
+END;
+
 IF OBJECT_ID('dbo.EmployeeTypeVersions', 'U') IS NULL
 BEGIN
     CREATE TABLE dbo.EmployeeTypeVersions (
@@ -524,6 +527,7 @@ BEGIN
         EmployeeTypeId int NOT NULL,
         StartDate date NOT NULL,
         EndDate date NULL,
+        DisplayOrder int NULL,
         Name nvarchar(50) NOT NULL,
         PatternId int NULL,
         IsActive bit NOT NULL CONSTRAINT DF_EmployeeTypeVersions_IsActive DEFAULT 1,
@@ -543,6 +547,24 @@ BEGIN
     );
 END;
 
+IF COL_LENGTH('dbo.EmployeeTypeVersions', 'DisplayOrder') IS NULL
+BEGIN
+    ALTER TABLE dbo.EmployeeTypeVersions
+    ADD DisplayOrder int NULL;
+END;
+
+IF COL_LENGTH('dbo.EmployeeTypeVersions', 'DisplayOrder') IS NOT NULL
+BEGIN
+    EXEC(N'
+        UPDATE etv
+           SET DisplayOrder = et.DisplayOrder
+          FROM dbo.EmployeeTypeVersions etv
+          INNER JOIN dbo.EmployeeTypes et
+            ON et.EmployeeTypeId = etv.EmployeeTypeId
+         WHERE etv.DisplayOrder IS NULL;
+    ');
+END;
+
 IF NOT EXISTS (
     SELECT 1 FROM sys.indexes
     WHERE name = 'IX_EmployeeTypeVersions_Schedule_Start_End'
@@ -558,30 +580,64 @@ IF NOT EXISTS (
     SELECT 1 FROM dbo.EmployeeTypeVersions
 )
 BEGIN
-    INSERT INTO dbo.EmployeeTypeVersions (
-        ScheduleId,
-        EmployeeTypeId,
-        StartDate,
-        EndDate,
-        Name,
-        PatternId,
-        CreatedAt,
-        CreatedBy,
-        IsActive
-    )
-    SELECT
-        et.ScheduleId,
-        et.EmployeeTypeId,
-        et.StartDate,
-        NULL,
-        et.Name,
-        et.PatternId,
-        ISNULL(et.CreatedAt, SYSUTCDATETIME()),
-        et.CreatedBy,
-        1
-    FROM dbo.EmployeeTypes et
-    WHERE et.DeletedAt IS NULL
-      AND et.IsActive = 1;
+    IF COL_LENGTH('dbo.EmployeeTypeVersions', 'DisplayOrder') IS NOT NULL
+    BEGIN
+        EXEC(N'
+            INSERT INTO dbo.EmployeeTypeVersions (
+                ScheduleId,
+                EmployeeTypeId,
+                StartDate,
+                EndDate,
+                DisplayOrder,
+                Name,
+                PatternId,
+                CreatedAt,
+                CreatedBy,
+                IsActive
+            )
+            SELECT
+                et.ScheduleId,
+                et.EmployeeTypeId,
+                et.StartDate,
+                NULL,
+                et.DisplayOrder,
+                et.Name,
+                et.PatternId,
+                ISNULL(et.CreatedAt, SYSUTCDATETIME()),
+                et.CreatedBy,
+                1
+            FROM dbo.EmployeeTypes et
+            WHERE et.DeletedAt IS NULL
+              AND et.IsActive = 1;
+        ');
+    END;
+    ELSE
+    BEGIN
+        INSERT INTO dbo.EmployeeTypeVersions (
+            ScheduleId,
+            EmployeeTypeId,
+            StartDate,
+            EndDate,
+            Name,
+            PatternId,
+            CreatedAt,
+            CreatedBy,
+            IsActive
+        )
+        SELECT
+            et.ScheduleId,
+            et.EmployeeTypeId,
+            et.StartDate,
+            NULL,
+            et.Name,
+            et.PatternId,
+            ISNULL(et.CreatedAt, SYSUTCDATETIME()),
+            et.CreatedBy,
+            1
+        FROM dbo.EmployeeTypes et
+        WHERE et.DeletedAt IS NULL
+          AND et.IsActive = 1;
+    END;
 END;
 
 IF OBJECT_ID('dbo.CoverageCodes', 'U') IS NULL
@@ -875,12 +931,14 @@ IF EXISTS (
 )
     DROP INDEX UX_Patterns_Schedule_Name_Active ON dbo.Patterns;
 
-IF NOT EXISTS (
+IF EXISTS (
     SELECT 1 FROM sys.indexes WHERE name = 'UX_Patterns_Schedule_NameNorm_Active' AND object_id = OBJECT_ID('dbo.Patterns')
 )
-    CREATE UNIQUE INDEX UX_Patterns_Schedule_NameNorm_Active
-    ON dbo.Patterns (ScheduleId, PatternNameNormalized)
-    WHERE DeletedAt IS NULL;
+    DROP INDEX UX_Patterns_Schedule_NameNorm_Active ON dbo.Patterns;
+
+CREATE UNIQUE INDEX UX_Patterns_Schedule_NameNorm_Active
+ON dbo.Patterns (ScheduleId, PatternNameNormalized)
+WHERE IsActive = 1 AND DeletedAt IS NULL;
 
 IF OBJECT_ID('dbo.TR_ScheduleUserTypes_NoOverlap', 'TR') IS NULL
 BEGIN

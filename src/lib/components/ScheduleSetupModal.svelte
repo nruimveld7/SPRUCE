@@ -32,6 +32,7 @@
 		| 'secondaryGradient2';
 	type ThemeDraft = Record<ThemeFieldKey, string>;
 	type ThemeFieldOption = { key: ThemeFieldKey; label: string; section: ThemeSection };
+	type StatusTone = 'success' | 'error' | 'info';
 	type ManagerCustomizationState = {
 		scheduleName: string;
 		isActive: boolean;
@@ -67,7 +68,7 @@
 	let selectedMembership: ScheduleMembership | null = null;
 	let isSavingDefault = false;
 	let isSwitchingSchedule = false;
-	let isSavingCustomization = false;
+	let isSavingManagerDraft = false;
 	let isCreatingSchedule = false;
 	let isTogglingScheduleState = false;
 	let showCreateScheduleForm = false;
@@ -81,8 +82,12 @@
 	let managerDraftByScheduleId: Record<number, ManagerCustomizationState> = {};
 	let selectedManagerSaved: ManagerCustomizationState | null = null;
 	let selectedManagerDraft: ManagerCustomizationState | null = null;
+	let hasManagerThemeChanges = false;
+	let areAllThemeFieldsAtDefaults = true;
 	let hasManagerDraftChanges = false;
-	let managerStatusMessage = '';
+	let managerDraftStatusMessage = '';
+	let managerDraftStatusTone: StatusTone = 'info';
+	let managerThemesExpanded = false;
 	let lastManagerSelectionId: number | null = null;
 	let selectedThemeMode: ThemeMode = 'dark';
 	let selectedThemeSection: ThemeSection = 'page';
@@ -312,15 +317,6 @@
 
 	function areThemeDraftsEqual(a: ThemeDraft, b: ThemeDraft): boolean {
 		return themeFieldOptions.every((field) => a[field.key] === b[field.key]);
-	}
-
-	function managerStatesEqual(a: ManagerCustomizationState, b: ManagerCustomizationState): boolean {
-		return (
-			a.scheduleName === b.scheduleName &&
-			a.isActive === b.isActive &&
-			areThemeDraftsEqual(a.themes.dark, b.themes.dark) &&
-			areThemeDraftsEqual(a.themes.light, b.themes.light)
-		);
 	}
 
 	function buildModeOverrides(mode: ThemeMode, theme: ThemeDraft): Record<string, string> {
@@ -570,7 +566,7 @@
 			...selectedManagerDraft,
 			scheduleName: input.value
 		});
-		managerStatusMessage = '';
+		managerDraftStatusMessage = '';
 	}
 
 	function handleManagerThemeInput(themeKey: ThemeFieldKey, rawColor: string) {
@@ -589,7 +585,38 @@
 		};
 		updateManagerDraft(selectedMembership.ScheduleId, next);
 		applyThemeState(next);
-		managerStatusMessage = '';
+		managerDraftStatusMessage = '';
+	}
+
+	function resolveScheduleNameForSave(draftName: string, savedName: string): string {
+		const trimmed = draftName.trim();
+		return trimmed || savedName;
+	}
+
+	async function postManagerCustomizationUpdate(
+		scheduleId: number,
+		nextState: ManagerCustomizationState
+	): Promise<void> {
+		const response = await fetchWithAuthRedirect(`${base}/api/schedules/customization`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', accept: 'application/json' },
+			body: JSON.stringify({
+				scheduleId,
+				scheduleName: nextState.scheduleName,
+				isActive: nextState.isActive,
+				theme: nextState.themes
+			})
+		});
+		if (!response) {
+			throw new Error('Session expired or access changed. Sign in again and retry.');
+		}
+		if (!response.ok) {
+			const message = await parseErrorMessage(
+				response,
+				`Failed to save customization (${response.status})`
+			);
+			throw new Error(message);
+		}
 	}
 
 	async function parseErrorMessage(response: Response, fallback: string): Promise<string> {
@@ -624,7 +651,7 @@
 		if (isTogglingScheduleState) return;
 		isTogglingScheduleState = true;
 		actionError = '';
-		managerStatusMessage = '';
+		managerDraftStatusMessage = '';
 
 		const scheduleId = selectedMembership.ScheduleId;
 		const nextIsActive = !selectedManagerDraft.isActive;
@@ -718,17 +745,25 @@
 		};
 		updateManagerDraft(selectedMembership.ScheduleId, next);
 		applyThemeState(next);
-		managerStatusMessage = '';
 	}
 
-	function handleManagerCancel() {
+	function handleManagerThemeRestoreSaved() {
 		if (!selectedMembership || selectedMembership.RoleName !== 'Manager' || !selectedManagerSaved)
 			return;
-		selectedThemeMode = currentThemeMode;
-		selectedThemeSection = 'page';
-		updateManagerDraft(selectedMembership.ScheduleId, selectedManagerSaved);
-		applyThemeState(selectedManagerSaved);
-		managerStatusMessage = '';
+		const scheduleId = selectedMembership.ScheduleId;
+		const draft = managerDraftByScheduleId[scheduleId];
+		if (!draft) return;
+		const nextDraft: ManagerCustomizationState = {
+			...draft,
+			themes: {
+				dark: { ...selectedManagerSaved.themes.dark },
+				light: { ...selectedManagerSaved.themes.light }
+			}
+		};
+		updateManagerDraft(scheduleId, nextDraft);
+		if (isSelectedMembershipActive) {
+			applyThemeState(nextDraft);
+		}
 	}
 
 	function toggleSelectedThemeMode() {
@@ -737,49 +772,63 @@
 		void onThemeModeChange(nextMode);
 	}
 
-	async function handleManagerSave() {
-		if (!selectedMembership || selectedMembership.RoleName !== 'Manager' || !selectedManagerDraft)
+	function toggleManagerThemesExpanded() {
+		managerThemesExpanded = !managerThemesExpanded;
+	}
+
+	async function handleManagerSaveDraft() {
+		if (
+			!selectedMembership ||
+			selectedMembership.RoleName !== 'Manager' ||
+			!selectedManagerDraft ||
+			!selectedManagerSaved
+		)
 			return;
-		if (isSavingCustomization) return;
-		const nextSaved = cloneManagerState(selectedManagerDraft);
-		nextSaved.scheduleName = nextSaved.scheduleName.trim() || selectedMembership.Name;
-		isSavingCustomization = true;
-		managerStatusMessage = '';
+		if (isSavingManagerDraft) return;
+		if (!hasManagerDraftChanges) {
+			managerDraftStatusTone = 'info';
+			managerDraftStatusMessage = 'No changes to save.';
+			return;
+		}
+
+		const scheduleId = selectedMembership.ScheduleId;
+		const nextName = resolveScheduleNameForSave(
+			selectedManagerDraft.scheduleName,
+			selectedManagerSaved.scheduleName
+		);
+		const nextSaved: ManagerCustomizationState = {
+			...selectedManagerSaved,
+			scheduleName: nextName,
+			themes: {
+				dark: { ...selectedManagerDraft.themes.dark },
+				light: { ...selectedManagerDraft.themes.light }
+			}
+		};
+		isSavingManagerDraft = true;
+		managerDraftStatusMessage = '';
 
 		try {
-			const response = await fetchWithAuthRedirect(`${base}/api/schedules/customization`, {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json', accept: 'application/json' },
-				body: JSON.stringify({
-					scheduleId: selectedMembership.ScheduleId,
-					scheduleName: nextSaved.scheduleName,
-					isActive: nextSaved.isActive,
-					theme: nextSaved.themes
-				})
-			});
-			if (!response) return;
-			if (!response.ok) {
-				const message = await parseErrorMessage(
-					response,
-					`Failed to save customization (${response.status})`
-				);
-				throw new Error(message);
-			}
+			await postManagerCustomizationUpdate(scheduleId, nextSaved);
 			managerSavedByScheduleId = {
 				...managerSavedByScheduleId,
-				[selectedMembership.ScheduleId]: cloneManagerState(nextSaved)
+				[scheduleId]: cloneManagerState(nextSaved)
 			};
 			managerDraftByScheduleId = {
 				...managerDraftByScheduleId,
-				[selectedMembership.ScheduleId]: cloneManagerState(nextSaved)
+				[scheduleId]: cloneManagerState(nextSaved)
 			};
 			await refreshMemberships();
-			applyThemeState(nextSaved);
+			if (isSelectedMembershipActive) {
+				applyThemeState(nextSaved);
+			}
+			managerDraftStatusTone = 'success';
+			managerDraftStatusMessage = 'Changes saved.';
 		} catch (errorValue) {
-			managerStatusMessage =
+			managerDraftStatusTone = 'error';
+			managerDraftStatusMessage =
 				errorValue instanceof Error ? errorValue.message : 'Failed to save customization';
 		} finally {
-			isSavingCustomization = false;
+			isSavingManagerDraft = false;
 		}
 	}
 
@@ -916,7 +965,7 @@
 		showCreateScheduleForm = true;
 		newScheduleName = '';
 		actionError = '';
-		managerStatusMessage = '';
+		managerDraftStatusMessage = '';
 		if (typeof document !== 'undefined') {
 			const activeEl = document.activeElement;
 			if (activeEl instanceof HTMLElement) {
@@ -1145,9 +1194,24 @@
 		}
 	}
 
+	$: hasManagerThemeChanges =
+		selectedManagerSaved && selectedManagerDraft
+			? !areThemeDraftsEqual(selectedManagerSaved.themes.dark, selectedManagerDraft.themes.dark) ||
+				!areThemeDraftsEqual(selectedManagerSaved.themes.light, selectedManagerDraft.themes.light)
+			: false;
+
+	$: areAllThemeFieldsAtDefaults =
+		selectedManagerDraft !== null
+			? areThemeDraftsEqual(selectedManagerDraft.themes.dark, themeDefaults.dark) &&
+				areThemeDraftsEqual(selectedManagerDraft.themes.light, themeDefaults.light)
+			: true;
+
 	$: hasManagerDraftChanges =
 		selectedManagerSaved && selectedManagerDraft
-			? !managerStatesEqual(selectedManagerSaved, selectedManagerDraft)
+			? resolveScheduleNameForSave(
+					selectedManagerDraft.scheduleName,
+					selectedManagerSaved.scheduleName
+				) !== selectedManagerSaved.scheduleName || hasManagerThemeChanges
 			: false;
 
 	$: {
@@ -1155,10 +1219,14 @@
 			selectedMembership && selectedMembership.RoleName === 'Manager'
 				? selectedMembership.ScheduleId
 				: null;
-		if (currentManagerSelectionId !== lastManagerSelectionId) {
-			managerStatusMessage = '';
+		if (
+			currentManagerSelectionId !== null &&
+			currentManagerSelectionId !== lastManagerSelectionId
+		) {
+			managerDraftStatusMessage = '';
 			selectedThemeMode = currentThemeMode;
 			selectedThemeSection = 'page';
+			managerThemesExpanded = false;
 			lastManagerSelectionId = currentManagerSelectionId;
 		}
 	}
@@ -1170,12 +1238,14 @@
 		selectedScheduleId = null;
 		selectedThemeMode = currentThemeMode;
 		selectedThemeSection = 'page';
+		managerThemesExpanded = false;
 		lastManagerSelectionId = null;
 		showCreateScheduleForm = false;
 		newScheduleName = '';
 		syncSelectionToCurrentOnRefresh = true;
 		actionError = '';
 		membershipsError = '';
+		managerDraftStatusMessage = '';
 		void refreshMemberships();
 	}
 
@@ -1214,6 +1284,7 @@
 		syncSelectionToCurrentOnRefresh = false;
 		stopDragging();
 		applyActiveScheduleThemeOrDefault();
+		managerDraftStatusMessage = '';
 	}
 
 	$: modalScrollSyncKey = open
@@ -1224,6 +1295,7 @@
 				selectedThemeMode,
 				selectedThemeSection,
 				actionError,
+				managerDraftStatusMessage,
 				membershipsLoading ? '1' : '0',
 				membershipsError
 			].join('|')
@@ -1402,64 +1474,111 @@
 											</button>
 										</div>
 										{#if isSelectedMembershipActive}
-											<br />
-											<span class="setupFieldLabel">Themes</span>
-											<br />
-											<div
-												class="managerThemeSectionSwitch"
-												role="tablist"
-												aria-label="Theme section"
-											>
-												<ThemeToggle theme={selectedThemeMode} onToggle={toggleSelectedThemeMode} />
-												<button
-													type="button"
-													role="tab"
-													class={`actionBtn btn${selectedThemeSection === 'page' ? ' primary' : ''}`}
-													aria-selected={selectedThemeSection === 'page'}
-													on:click={() => (selectedThemeSection = 'page')}
-												>
-													Page
-												</button>
-												<button
-													type="button"
-													role="tab"
-													class={`actionBtn btn${selectedThemeSection === 'schedule' ? ' primary' : ''}`}
-													aria-selected={selectedThemeSection === 'schedule'}
-													on:click={() => (selectedThemeSection = 'schedule')}
-												>
-													Schedule
-												</button>
-											</div>
+											<div class="managerThemesSection">
+												<div class="managerThemesContainer" class:expanded={managerThemesExpanded}>
+													<button
+														type="button"
+														class="btn managerThemesCollapseBtn"
+														on:click={toggleManagerThemesExpanded}
+														aria-expanded={managerThemesExpanded}
+													>
+														<span>Themes</span>
+														<span class="managerThemesChevron" aria-hidden="true">
+															{managerThemesExpanded ? '▾' : '▸'}
+														</span>
+													</button>
+													{#if managerThemesExpanded}
+														<div class="managerThemesContent">
+															<div
+																class="managerThemeSectionSwitch"
+																role="tablist"
+																aria-label="Theme section"
+															>
+																<ThemeToggle
+																	theme={selectedThemeMode}
+																	onToggle={toggleSelectedThemeMode}
+																/>
+																<button
+																	type="button"
+																	role="tab"
+																	class={`actionBtn btn${selectedThemeSection === 'page' ? ' primary' : ''}`}
+																	aria-selected={selectedThemeSection === 'page'}
+																	on:click={() => (selectedThemeSection = 'page')}
+																>
+																	Page
+																</button>
+																<button
+																	type="button"
+																	role="tab"
+																	class={`actionBtn btn${selectedThemeSection === 'schedule' ? ' primary' : ''}`}
+																	aria-selected={selectedThemeSection === 'schedule'}
+																	on:click={() => (selectedThemeSection = 'schedule')}
+																>
+																	Schedule
+																</button>
+																<div class="managerThemeQuickActions">
+																	<button
+																		type="button"
+																		class="btn actionBtn managerThemeDefaultBtn"
+																		on:click={handleManagerResetDefaults}
+																		disabled={areAllThemeFieldsAtDefaults || isSavingManagerDraft}
+																		title={areAllThemeFieldsAtDefaults
+																			? 'Already using default theme'
+																			: 'Reset theme colors to default values'}
+																	>
+																		Default
+																	</button>
+																	<button
+																		type="button"
+																		class="btn actionBtn managerThemeRevertBtn"
+																		class:dirty={hasManagerThemeChanges}
+																		on:click={handleManagerThemeRestoreSaved}
+																		disabled={!hasManagerThemeChanges || isSavingManagerDraft}
+																		title={hasManagerThemeChanges
+																			? 'Revert theme colors to last saved values'
+																			: 'No theme color changes have been made'}
+																	>
+																		Revert
+																	</button>
+																</div>
+															</div>
 
-											<div class="managerThemeTableWrap">
-												<table class="managerThemeTable">
-													<thead>
-														<tr>
-															<th scope="col">Setting</th>
-															<th scope="col">Color</th>
-														</tr>
-													</thead>
-													<tbody>
-														{#each activeThemeFieldOptions as themeField (themeField.key)}
-															<tr>
-																<th scope="row">{themeField.label}</th>
-																<td>
-																	<div class="managerThemeField">
-																		<ColorPicker
-																			id={`manager-theme-${themeField.key}`}
-																			label={themeField.label}
-																			value={selectedManagerDraft.themes[selectedThemeMode][
-																				themeField.key
-																			]}
-																			on:change={(event) =>
-																				handleManagerThemeInput(themeField.key, event.detail)}
-																		/>
-																	</div>
-																</td>
-															</tr>
-														{/each}
-													</tbody>
-												</table>
+															<div class="managerThemeTableWrap">
+																<table class="managerThemeTable">
+																	<thead>
+																		<tr>
+																			<th scope="col">Setting</th>
+																			<th scope="col">Color</th>
+																		</tr>
+																	</thead>
+																	<tbody>
+																		{#each activeThemeFieldOptions as themeField (themeField.key)}
+																			<tr>
+																				<th scope="row">{themeField.label}</th>
+																				<td>
+																					<div class="managerThemeField">
+																						<ColorPicker
+																							id={`manager-theme-${themeField.key}`}
+																							label={themeField.label}
+																							value={selectedManagerDraft.themes[selectedThemeMode][
+																								themeField.key
+																							]}
+																							on:change={(event) =>
+																								handleManagerThemeInput(
+																									themeField.key,
+																									event.detail
+																								)}
+																						/>
+																					</div>
+																				</td>
+																			</tr>
+																		{/each}
+																	</tbody>
+																</table>
+															</div>
+														</div>
+													{/if}
+												</div>
 											</div>
 										{:else}
 											<p class="setupCardHint">
@@ -1468,31 +1587,32 @@
 										{/if}
 
 										<div class="setupActions managerCustomizationActions">
-											{#if isSelectedMembershipActive}
-												<button class="btn" type="button" on:click={handleManagerResetDefaults}>
-													Default
-												</button>
-											{/if}
 											<button
-												class="btn"
+												class="btn primary managerSaveBtn"
 												type="button"
-												on:click={handleManagerCancel}
-												disabled={!hasManagerDraftChanges}
+												on:click={handleManagerSaveDraft}
+												disabled={!hasManagerDraftChanges || isSavingManagerDraft}
+												title={hasManagerDraftChanges
+													? 'Save schedule changes'
+													: 'No changes have been made.'}
 											>
-												Revert
-											</button>
-											<button
-												class="btn primary"
-												type="button"
-												on:click={handleManagerSave}
-												disabled={!hasManagerDraftChanges || isSavingCustomization}
-											>
-												{isSavingCustomization ? 'Saving...' : 'Save'}
+												{isSavingManagerDraft ? 'Saving...' : 'Save'}
 											</button>
 										</div>
 
-										{#if managerStatusMessage}
-											<p class="managerStatusMessage">{managerStatusMessage}</p>
+										{#if managerDraftStatusMessage}
+											<p
+												class={`managerStatusMessage managerStatusMessage${
+													managerDraftStatusTone === 'success'
+														? 'Success'
+														: managerDraftStatusTone === 'error'
+															? 'Error'
+															: 'Info'
+												}`}
+												role={managerDraftStatusTone === 'error' ? 'alert' : 'status'}
+											>
+												{managerDraftStatusMessage}
+											</p>
 										{/if}
 									</div>
 								{/if}

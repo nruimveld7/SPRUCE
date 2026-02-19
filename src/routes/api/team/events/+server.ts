@@ -238,12 +238,10 @@ async function ensureUserScopeIsValid(pool: Awaited<ReturnType<typeof GetPool>>,
 			`SELECT TOP (1) 1 AS HasUser
 			 FROM dbo.ScheduleUsers
 			 WHERE ScheduleId = @scheduleId
-			   AND UserOid = @userOid
-			   AND IsActive = 1
-			   AND DeletedAt IS NULL;`
+			   AND UserOid = @userOid;`
 		);
 	if (!userResult.recordset?.[0]?.HasUser) {
-		throw error(400, 'Selected user does not have access to this schedule');
+		throw error(400, 'Selected user does not belong to this schedule');
 	}
 }
 

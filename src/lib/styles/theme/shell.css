@@ -329,6 +329,11 @@
   transform: translateY(1px);
 }
 
+.btn:disabled:active,
+.btn[disabled]:active {
+  transform: none;
+}
+
 .btn.primary {
   background: linear-gradient(180deg, var(--gradient-primary-start), var(--gradient-primary-end));
   border-color: var(--border-accent-medium);
@@ -370,6 +375,11 @@
 
 .modeToggle:active {
   transform: translateY(1px);
+}
+
+.modeToggle:disabled:active,
+.modeToggle[disabled]:active {
+  transform: none;
 }
 
 .modeIcon {
@@ -473,6 +483,11 @@ select:focus {
 
 .pickerBtn:active {
   transform: translateY(1px);
+}
+
+.pickerBtn:disabled:active,
+.pickerBtn[disabled]:active {
+  transform: none;
 }
 
 .pickerBtn:focus-visible {
@@ -685,6 +700,15 @@ select:focus {
 
 .datePickerBtn.pressed {
   transform: translateY(1px);
+}
+
+.datePickerBtn:disabled,
+.datePickerBtn[disabled],
+.datePickerBtn:disabled:active,
+.datePickerBtn[disabled]:active,
+.datePickerBtn.pressed:disabled,
+.datePickerBtn.pressed[disabled] {
+  transform: none;
 }
 
 .displayNameModalBackdrop {
@@ -961,7 +985,8 @@ select:focus {
   padding-top: 8px;
   border-top: 1px solid var(--grid-2);
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .datePickerFooterBtn {
@@ -978,6 +1003,10 @@ select:focus {
 .datePickerFooterBtn:hover {
   background: var(--interactive-bg-hover);
   border-color: var(--interactive-border-hover);
+}
+
+.datePickerFooterBtnNone {
+  margin-right: auto;
 }
 
 :root[data-theme='light'] .pickerBtn {

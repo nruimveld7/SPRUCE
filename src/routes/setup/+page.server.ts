@@ -18,7 +18,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 };
 
 export const actions: Actions = {
-	default: async ({ request, locals }) => {
+	default: async ({ request, locals, cookies }) => {
 		const user = locals.user;
 		if (!user) {
 			throw redirect(302, '/auth/login');
@@ -80,7 +80,7 @@ export const actions: Actions = {
 
 		const scheduleId = result.recordset?.[0]?.ScheduleId;
 		if (scheduleId) {
-			await setActiveScheduleForSession(locals.cookies, scheduleId);
+			await setActiveScheduleForSession(cookies, scheduleId);
 		}
 
 		throw redirect(303, '/');

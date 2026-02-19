@@ -209,9 +209,28 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		const deleteResult = await new sql.Request(tx)
 			.input('scheduleId', scheduleId)
 			.query(
-				`UPDATE dbo.Users
-				 SET DefaultScheduleId = NULL
-				 WHERE DefaultScheduleId = @scheduleId;
+				`UPDATE u
+				 SET DefaultScheduleId = nextSchedule.ScheduleId,
+					 UpdatedAt = SYSUTCDATETIME()
+				 FROM dbo.Users u
+				 OUTER APPLY (
+					 SELECT TOP (1) su.ScheduleId
+					 FROM dbo.ScheduleUsers su
+					 INNER JOIN dbo.Schedules s
+					   ON s.ScheduleId = su.ScheduleId
+					 LEFT JOIN dbo.Roles r
+					   ON r.RoleId = su.RoleId
+					 WHERE su.UserOid = u.UserOid
+					   AND su.ScheduleId <> @scheduleId
+					   AND su.IsActive = 1
+					   AND su.DeletedAt IS NULL
+					   AND s.DeletedAt IS NULL
+					   AND (s.IsActive = 1 OR r.RoleName = 'Manager')
+					 GROUP BY su.ScheduleId, s.Name
+					 ORDER BY s.Name ASC, su.ScheduleId ASC
+				 ) AS nextSchedule
+				 WHERE u.DefaultScheduleId = @scheduleId
+				   AND u.DeletedAt IS NULL;
 
 				 DELETE FROM dbo.ScheduleEvents
 				 WHERE ScheduleId = @scheduleId;
