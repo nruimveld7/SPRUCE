@@ -13,10 +13,17 @@
 	export let monthDays: MonthDay[] = [];
 	export let selectedDay: number | null = null;
 	export let selectedGroupIndex: number | null = null;
+	export let selectedCellKey: string | null = null;
+	export let selectedRowKey: string | null = null;
+	export let rowKey = '';
 	export let groupIndex = -1;
 	export let isLastVisibleRow = false;
+	export let mergeFirstTwoColumns = false;
 	export let onSelectDay: (day: number) => void = () => {};
 	export let onDoubleClickDay: (day: MonthDay) => void = () => {};
+	export let onShiftCellContextMenu: (event: MouseEvent) => void = () => {};
+	export let onHoverShiftCell: (pointer: { clientX: number; clientY: number }) => void = () => {};
+	export let onLeaveShiftCell: () => void = () => {};
 	export let onHoverDayCell: (
 		day: MonthDay,
 		cellEl: HTMLElement,
@@ -24,15 +31,21 @@
 	) => void = () => {};
 	export let onLeaveDayCell: () => void = () => {};
 	export let onToggle: () => void = () => {};
-	const DOUBLE_TAP_WINDOW_MS = 320;
-	let lastTouchTapDay: number | null = null;
-	let lastTouchTapAtMs = 0;
-	let suppressClickDay: number | null = null;
+	$: normalizedGroupWords = groupName
+		.trim()
+		.split(/\s+/)
+		.map((word) => word.replace(/[^A-Za-z0-9]/g, ''))
+		.filter((word) => word.length > 0);
+	$: normalizedGroupName = normalizedGroupWords.join(' ') || groupName.trim();
 	$: memberLabel = employeeCount === 1 ? 'member' : 'members';
-	$: ariaLabel = `${groupName}. ${employeeCount} ${memberLabel}. ${collapsed ? 'Collapsed' : 'Expanded'}.`;
+	$: ariaLabel = `${normalizedGroupName}. ${employeeCount} ${memberLabel}. ${collapsed ? 'Collapsed' : 'Expanded'}.`;
 	$: caret = collapsed ? '▸' : '▾';
+	$: showCaret = employeeCount > 0;
+	$: isRowSelected =
+		selectedRowKey === rowKey ||
+		Boolean(selectedCellKey?.startsWith(`collapsed-shift-day:${groupIndex}:`));
 	function dayClass(day: MonthDay) {
-		return `cell shiftRowCell${day.isWeekend ? ' wknd' : ''}`;
+		return `cell shiftRowCell collapsedGroupBoundary${isLastVisibleRow ? ' lastVisibleRowBoundary' : ''}${day.isWeekend ? ' wknd' : ''}`;
 	}
 
 	function dayIso(day: number): string {
@@ -62,38 +75,25 @@
 		] as const)
 	);
 
-	function handleDayCellClick(day: number, event: MouseEvent) {
-		if (suppressClickDay === day) {
-			suppressClickDay = null;
-			return;
-		}
-		// Ignore the second click of a double-click sequence.
-		if (event.detail > 1) return;
+	function handleDayCellClick(day: number) {
 		onSelectDay(day);
 	}
 
-	function handleDayCellTouchEnd(day: MonthDay, event: TouchEvent) {
-		const now = Date.now();
-		const isDoubleTap = lastTouchTapDay === day.day && now - lastTouchTapAtMs <= DOUBLE_TAP_WINDOW_MS;
-		lastTouchTapDay = day.day;
-		lastTouchTapAtMs = now;
-		if (!isDoubleTap) return;
-		event.preventDefault();
-		suppressClickDay = day.day;
-		lastTouchTapDay = null;
-		lastTouchTapAtMs = 0;
-		onDoubleClickDay(day);
-	}
 </script>
 
 <div
-	class="cell namecol shiftRowCell"
+	class={`cell namecol shiftRowCell collapsedGroupBoundary${isLastVisibleRow ? ' lastVisibleRowBoundary' : ''}${isRowSelected ? ' rowSelected rowStart' : ''}`}
+	class:mergeTwoCols={mergeFirstTwoColumns}
 	role="button"
 	style="cursor: pointer;"
 	tabindex="0"
 	aria-expanded={!collapsed}
 	aria-label={ariaLabel}
 	on:click={onToggle}
+	on:contextmenu={onShiftCellContextMenu}
+	on:mouseenter={(event) => onHoverShiftCell({ clientX: event.clientX, clientY: event.clientY })}
+	on:mousemove={(event) => onHoverShiftCell({ clientX: event.clientX, clientY: event.clientY })}
+	on:mouseleave={onLeaveShiftCell}
 	on:keydown={(event) => {
 		if (event.key === 'Enter' || event.key === ' ') {
 			event.preventDefault();
@@ -103,8 +103,10 @@
 >
 	<div class="groupRow">
 		<span style="display:flex;align-items:center;gap:10px;">
-			<span class="caret" aria-hidden="true">{caret}</span>
-			<span>{groupName}</span>
+			{#if showCaret}
+				<span class="caret" aria-hidden="true">{caret}</span>
+			{/if}
+			<span>{normalizedGroupName}</span>
 		</span>
 		{#if employeeCount == 1}
 			<span class="groupMeta">{employeeCount} member</span>
@@ -117,17 +119,20 @@
 {#each monthDays as day}
 	{@const visuals = dayEventVisuals.get(day.day)}
 	{@const hasHoverEvents = dayHasHoverEvents.get(day.day) ?? false}
+	{@const isCellSelected = selectedCellKey === `collapsed-shift-day:${groupIndex}:${day.day}`}
 	<div
-		class={dayClass(day)}
+		class={`${dayClass(day)}${isCellSelected ? ' cellSelected' : ''}${isRowSelected ? ` rowSelected${day.day === monthDays[monthDays.length - 1]?.day ? ' rowEnd' : ''}` : ''}`}
 		data-scope="shift-day"
 		data-group-index={groupIndex}
 		data-day={day.day}
 		role="button"
 		tabindex="0"
-		aria-label={`Select ${groupName} on day ${day.day}`}
-		on:click={(event) => handleDayCellClick(day.day, event)}
-		on:dblclick={() => onDoubleClickDay(day)}
-		on:touchend={(event) => handleDayCellTouchEnd(day, event)}
+		aria-label={`Select ${normalizedGroupName} on day ${day.day}`}
+		on:click={() => handleDayCellClick(day.day)}
+		on:contextmenu={(event) => {
+			event.preventDefault();
+			onDoubleClickDay(day);
+		}}
 		on:keydown={(event) => {
 			if (event.key === 'Enter' || event.key === ' ') {
 				event.preventDefault();

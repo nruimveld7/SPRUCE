@@ -46,6 +46,8 @@ body.scrollbar-dragging .gridScrollRail,
 body.scrollbar-dragging .gridScrollThumb,
 body.scrollbar-dragging .gridScrollRailHorizontal,
 body.scrollbar-dragging .gridScrollThumbHorizontal,
+body.scrollbar-dragging .gridScrollRailVertical,
+body.scrollbar-dragging .gridScrollThumbVertical,
 body.scrollbar-dragging .pickerScrollRail,
 body.scrollbar-dragging .pickerScrollThumb {
   pointer-events: auto !important;

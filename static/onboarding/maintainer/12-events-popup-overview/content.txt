@@ -1,9 +1,11 @@
 Events Popup Overview
 The Events popup provides an overview of the scheduled events for a particular scope on any given day.
 
-Double click on any cell in the main schedule view to access this menu for that scope on the selected day.
-
 There are three scopes to which an event can be applied:
 Full Day - applies to every team member that is assigned to any shift on the selected day
 Shift - applies to every team member that is assigned to the selected shift on the selected day
 Member - applies only to the team member that is selected on the selected day
+
+Right click on any cell in the schedule view to access this menu for that scope on the selected day.
+
+Right clicking on any cell in the calendar view will show this menu as well, but the scope will need to be entered manually.

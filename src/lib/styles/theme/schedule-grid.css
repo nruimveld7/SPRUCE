@@ -31,10 +31,10 @@
 }
 
 .gridScrollRailHorizontal {
-  position: absolute;
-  left: calc(12px + var(--team-col-width, clamp(220px, 20vw, 360px)) + var(--team-toggle-col-width, 0px));
-  right: 12px;
-  bottom: 5px;
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 0;
   height: var(--scrollbar-size);
   z-index: 25;
   border-radius: var(--scrollbar-radius);
@@ -63,10 +63,10 @@
 }
 
 .gridScrollRailVertical {
-  position: absolute;
-  top: calc(8px + var(--schedule-header-row-height, 44px));
-  right: 5px;
-  bottom: calc(8px + var(--scrollbar-size) + 5px);
+  position: fixed;
+  left: 0;
+  top: 0;
+  height: 0;
   width: var(--scrollbar-size);
   z-index: 25;
   border-radius: var(--scrollbar-radius);
@@ -215,6 +215,19 @@
   height: 10px;
   border-radius: 999px;
   border: 1px solid var(--interactive-border);
+}
+
+.memberEventColorDot.mode-badge-indicator {
+  border-radius: 999px;
+}
+
+.memberEventColorDot.mode-shift-override {
+  border-radius: 3px;
+}
+
+.memberEventColorDot.mode-schedule-overlay {
+  border-radius: 2px;
+  transform: rotate(45deg);
 }
 
 .memberEventDates {
@@ -666,9 +679,9 @@
 }
 
 .teamColumnRailToggle {
-  left: var(--team-col-width, clamp(220px, 20vw, 360px));
+  left: calc(var(--shift-col-width, clamp(44px, 5vw, 64px)) + var(--team-col-width, 27ch));
   z-index: 30;
-  grid-column: 2;
+  grid-column: 3;
   grid-row: 1 / -1;
   align-self: stretch;
   width: var(--team-toggle-col-width, 14px);
@@ -684,7 +697,7 @@
 
 .teamColumnRailViewportGlyph {
   position: absolute;
-  left: calc(var(--team-col-width, clamp(220px, 20vw, 360px)) + (var(--team-toggle-col-width, 14px) / 2));
+  left: calc(var(--shift-col-width, clamp(44px, 5vw, 64px)) + var(--team-col-width, 27ch) + (var(--team-toggle-col-width, 14px) / 2));
   top: 50%;
   transform: translate(-50%, -50%);
   width: 14px;
@@ -1052,6 +1065,21 @@
 }
 
 .gridwrapShell.mobileTeamColumnCollapsed .namecol:not(.teamColumnRailToggle)>* {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.gridwrapShell.mobileTeamColumnCollapsed .shiftMergeCol {
+  width: 0 !important;
+  min-width: 0 !important;
+  max-width: 0 !important;
+  padding: 0;
+  overflow: hidden;
+  border-right-color: transparent;
+  pointer-events: none;
+}
+
+.gridwrapShell.mobileTeamColumnCollapsed .shiftMergeCol > * {
   opacity: 0;
   pointer-events: none;
 }

@@ -12,7 +12,10 @@
   export let selectedMonthIndex = new Date().getMonth();
   export let rowKey = '';
   export let selectedRowKey: string | null = null;
+  export let selectedCellKey: string | null = null;
   export let onSelectRow: (rowKey: string) => void = () => {};
+  export let onSelectCell: (cellKey: string) => void = () => {};
+  export let onSelectDayCell: (rowKey: string, day: number) => void = () => {};
   export let onOpenDisplayNameEditor: (employee: Employee) => void = () => {};
   export let monthDays: MonthDay[] = [];
   export let overrides: Record<string, { day: number; status: Status }[]>;
@@ -20,6 +23,7 @@
   export let selectedGroupIndex: number | null = null;
   export let groupIndex = -1;
   export let isLastVisibleRow = false;
+  export let isFirstInGroup = false;
   export let isLastInGroup = false;
   export let onDoubleClickDayCell: (employee: Employee, day: MonthDay) => void = () => {};
   export let onHoverDayCell: (
@@ -27,6 +31,8 @@
     cellEl: HTMLElement,
     pointer: { clientX: number; clientY: number }
   ) => void = () => {};
+  export let onHoverNameCell: (pointer: { clientX: number; clientY: number }) => void = () => {};
+  export let onLeaveNameCell: () => void = () => {};
   export let onLeaveDayCell: () => void = () => {};
   const DOUBLE_TAP_WINDOW_MS = 320;
   let lastTouchTapDay: number | null = null;
@@ -67,9 +73,22 @@
   }
 
   $: isRowSelected = selectedRowKey === rowKey;
+  $: isNameCellSelected = selectedCellKey === `name:${rowKey}`;
+  $: displayName = (() => {
+    const trimmed = employee.name.trim();
+    if (trimmed.length <= 25) return trimmed;
+    return `${trimmed.slice(0, 22)}...`;
+  })();
 
   function handleRowSelect() {
+    const key = `name:${rowKey}`;
+    if (selectedCellKey === key) {
+      onSelectRow(rowKey);
+      onSelectCell('');
+      return;
+    }
     onSelectRow(rowKey);
+    onSelectCell(key);
   }
 
   function handleRowDoubleClick() {
@@ -90,13 +109,20 @@
 </script>
 
 <div
-  class={`cell namecol selectableRowCell employeeRowCell${isRowSelected ? ' rowSelected rowStart' : ''}`}
+  class={`cell namecol selectableRowCell employeeRowCell${isFirstInGroup ? ' groupStartBorder' : ''}${isLastVisibleRow ? ' lastVisibleRowBoundary' : ''}${isRowSelected ? ' rowSelected rowStart' : ''}${isNameCellSelected ? ' cellSelected' : ''}`}
   role="button"
   tabindex="0"
   aria-pressed={isRowSelected}
   aria-label={`Select row for ${employee.name}`}
   on:click={handleRowSelect}
   on:dblclick={handleRowDoubleClick}
+  on:contextmenu={(event) => {
+    event.preventDefault();
+    handleRowDoubleClick();
+  }}
+  on:mouseenter={(event) => onHoverNameCell({ clientX: event.clientX, clientY: event.clientY })}
+  on:mousemove={(event) => onHoverNameCell({ clientX: event.clientX, clientY: event.clientY })}
+  on:mouseleave={onLeaveNameCell}
   on:keydown={(event) => {
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
@@ -105,13 +131,14 @@
   }}
 >
   <div class="person">
-    <div class="n">{employee.name}</div>
+    <div class="n">{displayName}</div>
   </div>
 </div>
 
 {#each rowData as cell, cellIndex}
+  {@const isDayCellSelected = selectedCellKey === `day:${rowKey}:${cell.day.day}`}
   <div
-    class={`${dayClass(cell.day)}${cell.dayColor ? ' patternCell' : ''}${isRowSelected ? ` rowSelected${cellIndex === rowData.length - 1 ? ' rowEnd' : ''}` : ''}`}
+    class={`${dayClass(cell.day)}${isFirstInGroup ? ' groupStartBorder' : ''}${isLastVisibleRow ? ' lastVisibleRowBoundary' : ''}${cell.dayColor ? ' patternCell' : ''}${isRowSelected ? ` rowSelected${cellIndex === rowData.length - 1 ? ' rowEnd' : ''}` : ''}${isDayCellSelected ? ' cellSelected' : ''}`}
     data-scope="employee-day"
     data-group-index={groupIndex}
     data-day={cell.day.day}
@@ -119,7 +146,11 @@
     role="gridcell"
     tabindex="-1"
     style={cell.dayColor ? `--pattern-cell-bg:${cell.dayColor};` : undefined}
-    on:dblclick={() => onDoubleClickDayCell(employee, cell.day)}
+    on:click={() => onSelectDayCell(rowKey, cell.day.day)}
+    on:contextmenu={(event) => {
+      event.preventDefault();
+      onDoubleClickDayCell(employee, cell.day);
+    }}
     on:touchend={(event) => handleDayCellTouchEnd(cell.day, event)}
     on:mouseenter={(event) => {
       if (!cell.hasHoverEvents) return;
@@ -180,3 +211,9 @@
     {/if}
   </div>
 {/each}
+
+<style>
+  .n {
+    white-space: nowrap;
+  }
+</style>

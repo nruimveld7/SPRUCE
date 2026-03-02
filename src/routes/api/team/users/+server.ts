@@ -1,7 +1,8 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { GetPool } from '$lib/server/db';
-import { getActiveScheduleId } from '$lib/server/auth';
+import { getActiveScheduleId, getSessionAccessToken } from '$lib/server/auth';
+import { searchTenantUsers } from '$lib/server/graph';
 import sql from 'mssql';
 import type { Cookies } from '@sveltejs/kit';
 import {
@@ -265,13 +266,20 @@ function assertCanManageRoleChanges(actor: ActorContext, currentRole: ScheduleRo
 	}
 }
 
-export const GET: RequestHandler = async ({ locals, cookies }) => {
+export const GET: RequestHandler = async (event) => {
+	const { locals, cookies, url } = event;
 	const currentUser = locals.user;
 	if (!currentUser) {
 		throw error(401, 'Unauthorized');
 	}
 
 	const { pool, ctx } = await getActorContext(currentUser.id, cookies);
+	const q = url.searchParams.get('q')?.trim() ?? '';
+	if (q.length > 0) {
+		const token = await getSessionAccessToken(event);
+		const users = await searchTenantUsers(token, q);
+		return json({ users });
+	}
 
 	const result = await pool
 		.request()

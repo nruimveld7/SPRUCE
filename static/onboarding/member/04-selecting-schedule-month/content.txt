@@ -1,0 +1,5 @@
+Changing Schedule View
+Use the schedule view toggle to switch between schedule views
+
+The calendar view shows an overview of all events for the selected month.
+The schedule view shows a detailed display of shift assignments and events for the selected month.

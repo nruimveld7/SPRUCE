@@ -3249,6 +3249,12 @@
 		return eventCode.isActive ? '0' : '1';
 	}
 
+	function eventCodeIndicatorModeClass(displayMode: EventCodeDisplayMode): string {
+		if (displayMode === 'Shift Override') return 'mode-shift-override';
+		if (displayMode === 'Schedule Overlay') return 'mode-schedule-overlay';
+		return 'mode-badge-indicator';
+	}
+
 	function resetModalState() {
 		stopAddUserResultsDragging();
 		usersViewMode = 'list';
@@ -3467,7 +3473,7 @@
 		addUsersError = '';
 		try {
 			const queryParam = query ? `?q=${encodeURIComponent(query)}` : '';
-			const result = await fetchWithAuthRedirect(`${base}/test/api/users${queryParam}`, {
+			const result = await fetchWithAuthRedirect(`${base}/api/team/users${queryParam}`, {
 				method: 'GET'
 			});
 			if (!result) return;
@@ -6123,16 +6129,17 @@
 													{:else}
 														{#each sortedEventCodes as eventCode}
 															<tr>
-																<td>
-																	<div class="eventCodeInline">
-																		<span
-																			class="eventCodeColorDot"
-																			aria-hidden="true"
-																			style={`background:${eventCode.color};`}
-																		></span>
-																		<span>{eventCode.code}</span>
-																	</div>
-																</td>
+																	<td>
+																		<div class="eventCodeInline">
+																			<span
+																				class={`eventCodeColorDot ${eventCodeIndicatorModeClass(eventCode.displayMode)}`}
+																				aria-hidden="true"
+																				style={`background:${eventCode.color};`}
+																				title={eventCode.displayMode}
+																			></span>
+																			<span>{eventCode.code}</span>
+																		</div>
+																	</td>
 																<td>{eventCode.name}</td>
 																<td>
 																	<span class="eventCodeMetaPill">{eventCode.displayMode}</span>

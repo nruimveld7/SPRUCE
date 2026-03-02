@@ -28,29 +28,45 @@
 	const dispatch = createEventDispatcher<{ select: string; change: string }>();
 	const monthFormatter = new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' });
 	const monthShortFormatter = new Intl.DateTimeFormat(undefined, { month: 'short' });
-	const selectedDayFormatter = new Intl.DateTimeFormat(undefined, {
+	const selectedDayShortFormatter = new Intl.DateTimeFormat(undefined, {
 		month: 'short',
 		day: 'numeric',
 		year: 'numeric'
 	});
-	const selectedMonthFormatter = new Intl.DateTimeFormat(undefined, {
+	const selectedDayLongFormatter = new Intl.DateTimeFormat(undefined, {
+		month: 'long',
+		day: 'numeric',
+		year: 'numeric'
+	});
+	const selectedMonthShortFormatter = new Intl.DateTimeFormat(undefined, {
 		month: 'short',
+		year: 'numeric'
+	});
+	const selectedMonthLongFormatter = new Intl.DateTimeFormat(undefined, {
+		month: 'long',
 		year: 'numeric'
 	});
 	const selectedYearFormatter = new Intl.DateTimeFormat(undefined, { year: 'numeric' });
 	const weekdayLabels = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
 
 	let rootEl: HTMLDivElement | null = null;
+	let triggerValueEl: HTMLSpanElement | null = null;
+	let measureValueEl: HTMLSpanElement | null = null;
+	let labelResizeObserver: ResizeObserver | null = null;
 	let lastOpen = false;
 	let viewYear = 0;
 	let viewMonth = 0;
 	let yearGridDecadeStart = 0;
 	let viewMode: ViewMode = 'days';
 	let isTriggerPressed = false;
+	let showLongLabel = false;
+	let labelFitRafId = 0;
 
 	$: resolvedMenuId = menuId || `${id}-menu`;
 	$: selectedDate = parseValueForDepth(value, depth);
-	$: selectedLabel = formatSelectedLabel(selectedDate, depth, placeholder);
+	$: selectedLabelShort = formatSelectedLabel(selectedDate, depth, placeholder, false);
+	$: selectedLabelLong = formatSelectedLabel(selectedDate, depth, placeholder, true);
+	$: selectedLabel = showLongLabel ? selectedLabelLong : selectedLabelShort;
 	$: monthLabel = monthFormatter.format(new Date(viewYear, viewMonth, 1));
 	$: yearLabel = String(viewYear);
 	$: yearGridStart = yearGridDecadeStart - 1;
@@ -69,6 +85,25 @@
 			viewMode = depth === 'year' ? 'years' : depth === 'month' ? 'months' : 'days';
 		}
 		lastOpen = open;
+	}
+	$: scheduleLabelFitCheck(selectedLabelShort, selectedLabelLong);
+
+	function scheduleLabelFitCheck(shortLabel: string, longLabel: string) {
+		if (typeof window === 'undefined') {
+			showLongLabel = false;
+			return;
+		}
+		if (shortLabel === longLabel) {
+			showLongLabel = true;
+			return;
+		}
+		if (labelFitRafId) {
+			window.cancelAnimationFrame(labelFitRafId);
+		}
+		labelFitRafId = window.requestAnimationFrame(() => {
+			labelFitRafId = 0;
+			recomputeLabelFit();
+		});
 	}
 
 	function parseYearMonth(value: string): { year: number; month: number } | null {
@@ -161,11 +196,40 @@
 		return false;
 	}
 
-	function formatSelectedLabel(selected: Date | null, mode: PickerDepth, emptyLabel: string): string {
+	function formatCompactMonthLabel(selected: Date): string {
+		return selectedMonthShortFormatter.format(selected);
+	}
+
+	function formatSelectedLabel(
+		selected: Date | null,
+		mode: PickerDepth,
+		emptyLabel: string,
+		useLongMonth: boolean
+	): string {
 		if (!selected) return emptyLabel;
-		if (mode === 'day') return selectedDayFormatter.format(selected);
-		if (mode === 'month') return selectedMonthFormatter.format(selected);
+		if (mode === 'day') {
+			return useLongMonth
+				? selectedDayLongFormatter.format(selected)
+				: selectedDayShortFormatter.format(selected);
+		}
+		if (mode === 'month') {
+			return useLongMonth
+				? selectedMonthLongFormatter.format(selected)
+				: formatCompactMonthLabel(selected);
+		}
 		return selectedYearFormatter.format(selected);
+	}
+
+	function recomputeLabelFit() {
+		if (selectedLabelShort === selectedLabelLong) {
+			showLongLabel = true;
+			return;
+		}
+		if (!triggerValueEl || !measureValueEl) {
+			showLongLabel = false;
+			return;
+		}
+		showLongLabel = measureValueEl.scrollWidth <= triggerValueEl.clientWidth;
 	}
 
 	function buildCalendarCells(
@@ -410,9 +474,26 @@
 	}
 
 	onMount(() => {
+		if (typeof ResizeObserver !== 'undefined') {
+			labelResizeObserver = new ResizeObserver(() => {
+				recomputeLabelFit();
+			});
+			if (triggerValueEl) {
+				labelResizeObserver.observe(triggerValueEl);
+			}
+		}
 		document.addEventListener('mousedown', handleDocMouseDown);
 		document.addEventListener('keydown', handleKeydown);
+		scheduleLabelFitCheck(selectedLabelShort, selectedLabelLong);
 		return () => {
+			if (labelResizeObserver) {
+				labelResizeObserver.disconnect();
+				labelResizeObserver = null;
+			}
+			if (typeof window !== 'undefined' && labelFitRafId) {
+				window.cancelAnimationFrame(labelFitRafId);
+				labelFitRafId = 0;
+			}
 			document.removeEventListener('mousedown', handleDocMouseDown);
 			document.removeEventListener('keydown', handleKeydown);
 		};
@@ -448,7 +529,10 @@
 		on:blur={onTriggerPointerUp}
 		{disabled}
 	>
-		<span>{selectedLabel}</span>
+		<span class="datePickerBtnValue" bind:this={triggerValueEl}>{selectedLabel}</span>
+		<span class="datePickerBtnMeasure" aria-hidden="true" bind:this={measureValueEl}>
+			{selectedLabelLong}
+		</span>
 		<span class="chev" aria-hidden="true">▾</span>
 	</button>
 

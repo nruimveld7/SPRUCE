@@ -21,6 +21,7 @@ type CandidateEventRow = {
 	ShiftId: number | null;
 	StartDate: Date | string;
 	EndDate: Date | string;
+	Notes: string | null;
 	ScheduledRemindersJson: string | null;
 	ScheduleName: string | null;
 	ScheduleThemeJson: string | null;
@@ -375,6 +376,7 @@ export async function dispatchDueScheduledEventReminders(): Promise<ScheduledRem
 			se.ShiftId,
 			se.StartDate,
 			se.EndDate,
+			se.Notes,
 			se.ScheduledRemindersJson,
 			s.Name AS ScheduleName,
 			s.ThemeJson AS ScheduleThemeJson,
@@ -407,6 +409,7 @@ export async function dispatchDueScheduledEventReminders(): Promise<ScheduledRem
 		const reminders = parseScheduledRemindersJson(eventRow.ScheduledRemindersJson);
 		if (reminders.length === 0) continue;
 		const eventName = toEventName(eventRow);
+		const comments = eventRow.Notes?.trim() ?? '';
 		const dateLabel = formatEventDateForEmail(eventRow.StartDate, eventRow.EndDate);
 		if (!dateLabel) continue;
 
@@ -477,7 +480,8 @@ export async function dispatchDueScheduledEventReminders(): Promise<ScheduledRem
 					intendedRecipients,
 					targetMemberName,
 					eventName,
-					date: dateLabel
+					date: dateLabel,
+					comments
 				});
 
 				summary.sentReminders += 1;

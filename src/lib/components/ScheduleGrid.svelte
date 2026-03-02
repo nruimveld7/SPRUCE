@@ -91,15 +91,22 @@
 	let gridWrapEl: HTMLDivElement | null = null;
 	let horizontalRailEl: HTMLDivElement | null = null;
 	let verticalRailEl: HTMLDivElement | null = null;
+	let gridResizeObserver: ResizeObserver | null = null;
+	let observedGridWrapEl: HTMLDivElement | null = null;
+	let observedGridEl: HTMLDivElement | null = null;
+	let scrollbarUpdateQueued = false;
+	let lastGridSizingLogKey = '';
 	let resizeQueued = false;
 	let mounted = false;
 	let useCustomGridScrollbars = true;
 	let showHorizontalScrollbar = false;
 	let horizontalThumbWidthPx = 0;
 	let horizontalThumbLeftPx = 0;
+	let horizontalRailStyle = '';
 	let showVerticalScrollbar = false;
 	let verticalThumbHeightPx = 0;
 	let verticalThumbTopPx = 0;
+	let verticalRailStyle = '';
 	let effectiveUserRowHeightPx = 44;
 	let isDraggingHorizontalScrollbar = false;
 	let isDraggingVerticalScrollbar = false;
@@ -110,12 +117,16 @@
 	let selectedRowKey: string | null = null;
 	let selectedDay: number | null = null;
 	let selectedGroupIndex: number | null = null;
+	let selectedCellKey: string | null = null;
 	let shiftPropagatedBadgeSizeByGroupIndex = new Map<number, number>();
 	let userBadgeSizeByGroupIndex = new Map<number, number>();
 	let lastSelectionContextKey = `${selectedYear}-${selectedMonthIndex}`;
 	let memberEventsPopupOpen = false;
 	let memberEventsPopupTitle = '';
 	let memberEventsPopupDayIso = '';
+	let memberEventsPopupStartIso = '';
+	let memberEventsPopupEndIso = '';
+	let memberEventsPopupWindowMode: 'day' | 'shift-month' = 'day';
 	let memberEventsPopupScopeType: EventScopeType = 'global';
 	let memberEventsPopupScopeShiftId: number | null = null;
 	let memberEventsPopupScopeUserOid: string | null = null;
@@ -166,11 +177,13 @@
 	let hoverTooltipPointerY = 0;
 	let hoverTooltipTitle = '';
 	let hoverTooltipScopeType: EventScopeType = 'global';
+	let hoverTooltipWindowMode: 'day' | 'shift-month' = 'day';
 	let hoverTooltipEntries: ScopedEventEntry[] = [];
 	let hoverTooltipLoading = false;
 	let hoverTooltipScope: HoverCellScope | null = null;
 	let hoverTooltipEl: HTMLDivElement | null = null;
 	let hoverTooltipFetchToken = 0;
+	let canUseHoverTooltips = true;
 	let memberEventsPopupPollTimer: ReturnType<typeof setInterval> | null = null;
 	let lastPopupResetToken = popupResetToken;
 	const scopedEventsCache = new Map<string, ScopedEventEntry[]>();
@@ -189,34 +202,46 @@
 	const reminderHourOptions = Array.from({ length: 13 }, (_, index) => index);
 	const reminderUnitOptions = ['days', 'weeks', 'months'];
 	const reminderMeridiemOptions = ['AM', 'PM'];
+	const DAY_COLUMN_MIN_WIDTH_PX = 34;
+	const FIXED_COLUMNS_WIDTH_PX = 420;
+	const COLLAPSED_FIXED_COLUMNS_WIDTH_PX = 14;
+	const GRID_MIN_WIDTH_FLOOR_PX = 1100;
+	const LOG_GRID_SIZING_DIAGNOSTICS = true;
 
 	$: days = monthDays;
 	$: dim = monthDays.length;
-	$: showTeamColumnRailToggle = showHorizontalScrollbar || teamColumnCollapsed;
-	$: teamColumnWidthCss =
-		showTeamColumnRailToggle && teamColumnCollapsed ? '0px' : 'clamp(220px, 20vw, 360px)';
+	$: showTeamColumnRailToggle =
+		useCustomGridScrollbars && (showHorizontalScrollbar || teamColumnCollapsed);
+	$: shiftColumnWidthCss =
+		showTeamColumnRailToggle && teamColumnCollapsed ? '0px' : 'clamp(44px, 5vw, 64px)';
+	$: teamColumnWidthCss = showTeamColumnRailToggle && teamColumnCollapsed ? '0px' : '27ch';
 	$: teamToggleColumnWidthCss = showTeamColumnRailToggle ? '14px' : '0px';
-	$: minimumGridWidthFloor = showTeamColumnRailToggle ? 320 : 1100;
-	$: minimumGridWidthFromContent =
-		(showTeamColumnRailToggle ? (teamColumnCollapsed ? 0 : 260) + 14 : 260) + dim * 40;
-	$: gridShellStyle = `--team-col-width:${teamColumnWidthCss}; --team-toggle-col-width:${teamToggleColumnWidthCss};`;
+	$: dayColumnMinWidthCss = `${DAY_COLUMN_MIN_WIDTH_PX}px`;
+	$: gridLeadingColumnsCss = showTeamColumnRailToggle
+		? 'var(--shift-col-width) var(--team-col-width) var(--team-toggle-col-width)'
+		: 'var(--shift-col-width) var(--team-col-width)';
+	$: minimumGridWidthFloor = GRID_MIN_WIDTH_FLOOR_PX;
+	$: effectiveFixedColumnsWidthPx = teamColumnCollapsed
+		? COLLAPSED_FIXED_COLUMNS_WIDTH_PX
+		: FIXED_COLUMNS_WIDTH_PX;
+	$: minimumGridWidthFromContent = effectiveFixedColumnsWidthPx + dim * DAY_COLUMN_MIN_WIDTH_PX;
+	$: gridShellStyle = `--shift-col-width:${shiftColumnWidthCss}; --team-col-width:${teamColumnWidthCss}; --team-toggle-col-width:${teamToggleColumnWidthCss}; --day-col-min-width:${dayColumnMinWidthCss};`;
 	$: gridTemplateRows = (() => {
 		const tracks: string[] = ['var(--schedule-header-row-height)'];
 		for (const group of groups) {
-			// Shift/group rows should size to content.
-			tracks.push('auto');
-			if (!collapsed[group.category]) {
-				// User rows should keep the existing min/max stretch behavior.
-				for (let i = 0; i < group.employees.length; i += 1) {
-					tracks.push(
-						'minmax(var(--schedule-row-min-height), var(--schedule-row-effective-height, var(--schedule-row-max-height)))'
-					);
-				}
+			if (collapsed[group.category] || group.employees.length === 0) {
+				tracks.push('auto');
+				continue;
+			}
+			for (let i = 0; i < group.employees.length; i += 1) {
+				tracks.push(
+					'minmax(var(--schedule-row-min-height), var(--schedule-row-effective-height, var(--schedule-row-max-height)))'
+				);
 			}
 		}
 		return tracks.join(' ');
 	})();
-	$: gridStyle = `--schedule-row-effective-height:${effectiveUserRowHeightPx}px; grid-template-columns: ${showTeamColumnRailToggle ? 'var(--team-col-width) var(--team-toggle-col-width)' : 'var(--team-col-width)'} repeat(${dim}, minmax(34px, 1fr)); grid-template-rows: ${gridTemplateRows}; min-width: ${Math.max(minimumGridWidthFromContent, minimumGridWidthFloor)}px;`;
+	$: gridStyle = `--schedule-row-effective-height:${effectiveUserRowHeightPx}px; grid-template-columns: ${gridLeadingColumnsCss} repeat(${dim}, minmax(var(--day-col-min-width), 1fr)); grid-template-rows: ${gridTemplateRows}; min-width: ${Math.max(minimumGridWidthFromContent, minimumGridWidthFloor)}px;`;
 	$: activeTodayDay = monthDays.find((item) => item.isToday)?.day ?? null;
 	$: shiftNameByShiftId = (() => {
 		const shiftNames = new Map<number, string>();
@@ -260,6 +285,7 @@
 	function toggleTeamColumnVisibility() {
 		if (!showTeamColumnRailToggle) return;
 		teamColumnCollapsed = !teamColumnCollapsed;
+		queueScrollbarUpdate(true);
 	}
 
 	function toIsoDate(year: number, monthIndex: number, day: number): string {
@@ -283,12 +309,59 @@
 		return `${monthNames[cellDate.getMonth()]} ${cellDate.getDate()}, ${cellDate.getFullYear()}`;
 	}
 
+	function monthWindowIso(year: number, monthIndex: number): { startIso: string; endIso: string } {
+		const startIso = toIsoDate(year, monthIndex, 1);
+		const lastDay = new Date(year, monthIndex + 1, 0).getDate();
+		const endIso = toIsoDate(year, monthIndex, lastDay);
+		return { startIso, endIso };
+	}
+
 	function formatReminderPreviewDate(date: Date): string {
 		return new Intl.DateTimeFormat('en-US', {
 			month: 'short',
 			day: 'numeric',
 			year: 'numeric'
 		}).format(date);
+	}
+
+	function formatEventDateOrRange(startDateIso: string, endDateIso: string): string {
+		if (startDateIso === endDateIso) {
+			return formatIsoDate(startDateIso);
+		}
+		return `${formatIsoDate(startDateIso)} to ${formatIsoDate(endDateIso)}`;
+	}
+
+	function shiftHasMonthEvents(group: Group): boolean {
+		const shiftId = group.employeeTypeId ?? null;
+		if (!shiftId) return false;
+		const { startIso, endIso } = monthWindowIso(selectedYear, selectedMonthIndex);
+		return events.some((eventRow) => {
+			const appliesToScope =
+				eventRow.scopeType === 'global' ||
+				(eventRow.scopeType === 'shift' && eventRow.employeeTypeId === shiftId);
+			if (!appliesToScope) return false;
+			return eventRow.startDate <= endIso && eventRow.endDate >= startIso;
+		});
+	}
+
+	function userHasMonthEvents(employee: Employee, groupShiftId: number | null): boolean {
+		const userOid = employee.userOid ?? null;
+		if (!userOid) return false;
+		const { startIso, endIso } = monthWindowIso(selectedYear, selectedMonthIndex);
+		const normalizedUserOid = userOid.trim().toLowerCase();
+		return events.some((eventRow) => {
+			const eventUserOid = eventRow.userOid?.trim().toLowerCase() ?? null;
+			const appliesToScope =
+				eventRow.scopeType === 'global' ||
+				(groupShiftId !== null &&
+					eventRow.scopeType === 'shift' &&
+					eventRow.employeeTypeId === groupShiftId) ||
+				(eventRow.scopeType === 'user' &&
+					eventUserOid === normalizedUserOid &&
+					(groupShiftId === null || eventRow.employeeTypeId === groupShiftId));
+			if (!appliesToScope) return false;
+			return eventRow.startDate <= endIso && eventRow.endDate >= startIso;
+		});
 	}
 
 	function reminderKey(reminderDraft: ScheduledReminderDraft): string {
@@ -334,9 +407,32 @@
 		const normalizedScopeLabel = scopeLabel?.trim() ?? '';
 		memberEventsPopupTitle = `${dateLabel} Events${normalizedScopeLabel ? ` - ${normalizedScopeLabel}` : ''}`;
 		memberEventsPopupDayIso = toIsoDate(selectedYear, selectedMonthIndex, day.day);
+		memberEventsPopupStartIso = memberEventsPopupDayIso;
+		memberEventsPopupEndIso = memberEventsPopupDayIso;
+		memberEventsPopupWindowMode = 'day';
 		memberEventsPopupScopeType = scopeType;
 		memberEventsPopupScopeShiftId = scopeShiftId;
 		memberEventsPopupScopeUserOid = scopeUserOid;
+		memberEventsPopupMode = 'list';
+		memberEventsError = '';
+		resetAddEventForm();
+		hideHoverEventsTooltip();
+		memberEventsPopupOpen = true;
+		await loadScopedEvents();
+	}
+
+	async function openShiftMonthEventsPopup(group: Group) {
+		const normalizedScopeLabel = group.category?.trim() ?? '';
+		const monthLabel = `${monthNames[selectedMonthIndex]} ${selectedYear}`;
+		memberEventsPopupTitle = `${monthLabel} Events${normalizedScopeLabel ? ` - ${normalizedScopeLabel}` : ''}`;
+		const { startIso, endIso } = monthWindowIso(selectedYear, selectedMonthIndex);
+		memberEventsPopupDayIso = startIso;
+		memberEventsPopupStartIso = startIso;
+		memberEventsPopupEndIso = endIso;
+		memberEventsPopupWindowMode = 'shift-month';
+		memberEventsPopupScopeType = 'shift';
+		memberEventsPopupScopeShiftId = group.employeeTypeId ?? null;
+		memberEventsPopupScopeUserOid = null;
 		memberEventsPopupMode = 'list';
 		memberEventsError = '';
 		resetAddEventForm();
@@ -360,12 +456,12 @@
 	}
 
 	function eventsCacheKey(
-		dayIso: string,
+		windowKey: string,
 		scopeType: EventScopeType,
 		scopeShiftId: number | null,
 		scopeUserOid: string | null
 	) {
-		return `${dayIso}|${scopeType}|${scopeShiftId ?? ''}|${scopeUserOid ?? ''}`;
+		return `${windowKey}|${scopeType}|${scopeShiftId ?? ''}|${scopeUserOid ?? ''}`;
 	}
 
 	function eventListTitle(day: MonthDay, scopeLabel: string | null = null): string {
@@ -406,15 +502,20 @@
 	}
 
 	async function fetchScopedEvents(
-		dayIso: string,
+		window:
+			| { dayIso: string; startIso?: undefined; endIso?: undefined }
+			| { dayIso?: undefined; startIso: string; endIso: string },
 		scopeType: EventScopeType,
 		scopeShiftId: number | null,
 		scopeUserOid: string | null
 	): Promise<ScopedEventEntry[]> {
-		const queryParts = [
-			`day=${encodeURIComponent(dayIso)}`,
-			`scope=${encodeURIComponent(scopeType)}`
-		];
+		const queryParts = [`scope=${encodeURIComponent(scopeType)}`];
+		if (window.dayIso) {
+			queryParts.push(`day=${encodeURIComponent(window.dayIso)}`);
+		} else {
+			queryParts.push(`startDate=${encodeURIComponent(window.startIso)}`);
+			queryParts.push(`endDate=${encodeURIComponent(window.endIso)}`);
+		}
 		if (scopeShiftId) {
 			queryParts.push(`employeeTypeId=${encodeURIComponent(String(scopeShiftId))}`);
 		}
@@ -441,7 +542,7 @@
 	}
 
 	async function loadScopedEvents() {
-		if (!memberEventsPopupDayIso) return;
+		if (!memberEventsPopupStartIso || !memberEventsPopupEndIso) return;
 		if (memberEventsPopupScopeType === 'shift' && !memberEventsPopupScopeShiftId) {
 			memberEventsError = 'This shift cannot be resolved for event lookups.';
 			scopedEventEntries = [];
@@ -456,8 +557,15 @@
 		memberEventsLoading = true;
 		memberEventsError = '';
 		try {
+			const window =
+				memberEventsPopupStartIso === memberEventsPopupEndIso
+					? ({ dayIso: memberEventsPopupStartIso } as const)
+					: ({
+							startIso: memberEventsPopupStartIso,
+							endIso: memberEventsPopupEndIso
+						} as const);
 			scopedEventEntries = await fetchScopedEvents(
-				memberEventsPopupDayIso,
+				window,
 				memberEventsPopupScopeType,
 				memberEventsPopupScopeShiftId,
 				memberEventsPopupScopeUserOid
@@ -527,12 +635,14 @@
 		hoverTooltipEntries = [];
 		hoverTooltipLoading = false;
 		hoverTooltipScope = null;
+		hoverTooltipWindowMode = 'day';
 	}
 
 	async function showHoverEventsTooltip(
 		scope: HoverCellScope,
 		pointer: { clientX: number; clientY: number }
 	) {
+		if (!canUseHoverTooltips) return;
 		if (memberEventsPopupOpen) return;
 		const sameScope = isSameHoverScope(hoverTooltipScope, scope);
 		if (sameScope && hoverTooltipOpen) {
@@ -543,11 +653,12 @@
 		hoverTooltipScope = scope;
 		hoverTooltipTitle = eventListTitle(scope.day, scope.scopeLabel);
 		hoverTooltipScopeType = scope.scopeType;
+		hoverTooltipWindowMode = 'day';
 		positionHoverTooltipAtPointer(pointer.clientX, pointer.clientY);
 		hoverTooltipOpen = true;
 		const dayIso = toIsoDate(selectedYear, selectedMonthIndex, scope.day.day);
 		const cacheKey = eventsCacheKey(
-			dayIso,
+			`day:${dayIso}`,
 			scope.scopeType,
 			scope.scopeShiftId,
 			scope.scopeUserOid
@@ -568,7 +679,7 @@
 		const fetchToken = ++hoverTooltipFetchToken;
 		try {
 			const nextEntries = await fetchScopedEvents(
-				dayIso,
+				{ dayIso },
 				scope.scopeType,
 				scope.scopeShiftId,
 				scope.scopeUserOid
@@ -655,8 +766,11 @@
 	function resetAddEventForm() {
 		addEventCodeId = 'custom';
 		addEventComments = '';
-		addEventStartDate = memberEventsPopupDayIso;
-		addEventEndDate = memberEventsPopupDayIso;
+		const firstOfMonthIso = toIsoDate(selectedYear, selectedMonthIndex, 1);
+		const shouldDefaultShiftMonthStart =
+			memberEventsPopupWindowMode === 'shift-month' && memberEventsPopupScopeType === 'shift';
+		addEventStartDate = shouldDefaultShiftMonthStart ? firstOfMonthIso : memberEventsPopupDayIso;
+		addEventEndDate = shouldDefaultShiftMonthStart ? firstOfMonthIso : memberEventsPopupDayIso;
 		addCustomEventCode = '';
 		addCustomEventName = '';
 		addCustomEventDisplayMode = 'Schedule Overlay';
@@ -1022,9 +1136,13 @@
 			suppressHeaderClickDay = null;
 			return;
 		}
-		// Ignore the second click of a double-click sequence.
-		if (event.detail > 1) return;
+		const key = `header-day:${day}`;
+		if (selectedCellKey === key) {
+			clearSelectionState();
+			return;
+		}
 		handleDaySelect(day);
+		selectedCellKey = key;
 	}
 
 	function handleDayHeaderTouchEnd(day: MonthDay, event: TouchEvent) {
@@ -1045,18 +1163,17 @@
 		void openMemberEventsPopup(day, 'shift', group.category, group.employeeTypeId ?? null, null);
 	}
 
+	function handleShiftCellContextMenu(event: MouseEvent, group: Group) {
+		event.preventDefault();
+		void openShiftMonthEventsPopup(group);
+	}
+
 	function handleEmployeeDayDoubleClick(
 		employee: Employee,
 		groupShiftId: number | null,
 		day: MonthDay
 	) {
-		void openMemberEventsPopup(
-			day,
-			'user',
-			employee.name,
-			groupShiftId,
-			employee.userOid ?? null
-		);
+		void openMemberEventsPopup(day, 'user', employee.name, groupShiftId, employee.userOid ?? null);
 	}
 
 	function handleDayHeaderHover(day: MonthDay, pointer: { clientX: number; clientY: number }) {
@@ -1092,6 +1209,108 @@
 			},
 			pointer
 		);
+	}
+
+	async function showShiftMonthHoverTooltip(
+		group: Group,
+		pointer: { clientX: number; clientY: number }
+	) {
+		if (!canUseHoverTooltips) return;
+		if (memberEventsPopupOpen) return;
+		const shiftId = group.employeeTypeId ?? null;
+		const { startIso, endIso } = monthWindowIso(selectedYear, selectedMonthIndex);
+		const title = `${monthNames[selectedMonthIndex]} ${selectedYear} Events - ${group.category}`;
+		positionHoverTooltipAtPointer(pointer.clientX, pointer.clientY);
+		hoverTooltipTitle = title;
+		hoverTooltipScopeType = 'shift';
+		hoverTooltipWindowMode = 'shift-month';
+		hoverTooltipOpen = true;
+		if (!shiftId) {
+			hoverTooltipLoading = false;
+			hoverTooltipEntries = [];
+			return;
+		}
+		const cacheKey = eventsCacheKey(`month:${startIso}:${endIso}`, 'shift', shiftId, null);
+		const cachedEntries = scopedEventsCache.get(cacheKey);
+		if (cachedEntries) {
+			hoverTooltipLoading = false;
+			hoverTooltipEntries = cachedEntries;
+			positionHoverTooltipAtPointer(hoverTooltipPointerX, hoverTooltipPointerY);
+			return;
+		}
+
+		hoverTooltipLoading = true;
+		hoverTooltipEntries = [];
+		const fetchToken = ++hoverTooltipFetchToken;
+		try {
+			const nextEntries = await fetchScopedEvents({ startIso, endIso }, 'shift', shiftId, null);
+			scopedEventsCache.set(cacheKey, nextEntries);
+			if (fetchToken !== hoverTooltipFetchToken || memberEventsPopupOpen) return;
+			hoverTooltipLoading = false;
+			hoverTooltipEntries = nextEntries;
+			positionHoverTooltipAtPointer(hoverTooltipPointerX, hoverTooltipPointerY);
+		} catch (error) {
+			if (fetchToken !== hoverTooltipFetchToken) return;
+			void error;
+			hideHoverEventsTooltip();
+		}
+	}
+
+	async function showUserMonthHoverTooltip(
+		employee: Employee,
+		groupShiftId: number | null,
+		pointer: { clientX: number; clientY: number }
+	) {
+		if (!canUseHoverTooltips) return;
+		if (memberEventsPopupOpen) return;
+		const userOid = employee.userOid ?? null;
+		const { startIso, endIso } = monthWindowIso(selectedYear, selectedMonthIndex);
+		const title = `${monthNames[selectedMonthIndex]} ${selectedYear} Events - ${employee.name}`;
+		positionHoverTooltipAtPointer(pointer.clientX, pointer.clientY);
+		hoverTooltipTitle = title;
+		hoverTooltipScopeType = 'user';
+		hoverTooltipWindowMode = 'shift-month';
+		hoverTooltipOpen = true;
+		if (!userOid) {
+			hoverTooltipLoading = false;
+			hoverTooltipEntries = [];
+			return;
+		}
+		const shiftKey = groupShiftId ?? 0;
+		const cacheKey = eventsCacheKey(
+			`month-user:${startIso}:${endIso}:${shiftKey}:${userOid}`,
+			'user',
+			groupShiftId,
+			userOid
+		);
+		const cachedEntries = scopedEventsCache.get(cacheKey);
+		if (cachedEntries) {
+			hoverTooltipLoading = false;
+			hoverTooltipEntries = cachedEntries;
+			positionHoverTooltipAtPointer(hoverTooltipPointerX, hoverTooltipPointerY);
+			return;
+		}
+
+		hoverTooltipLoading = true;
+		hoverTooltipEntries = [];
+		const fetchToken = ++hoverTooltipFetchToken;
+		try {
+			const nextEntries = await fetchScopedEvents(
+				{ startIso, endIso },
+				'user',
+				groupShiftId,
+				userOid
+			);
+			scopedEventsCache.set(cacheKey, nextEntries);
+			if (fetchToken !== hoverTooltipFetchToken || memberEventsPopupOpen) return;
+			hoverTooltipLoading = false;
+			hoverTooltipEntries = nextEntries;
+			positionHoverTooltipAtPointer(hoverTooltipPointerX, hoverTooltipPointerY);
+		} catch (error) {
+			if (fetchToken !== hoverTooltipFetchToken) return;
+			void error;
+			hideHoverEventsTooltip();
+		}
 	}
 
 	function handleEmployeeDayHover(
@@ -1166,9 +1385,108 @@
 		void _groups;
 		void _collapsed;
 		void _monthDays;
-		if (typeof window !== 'undefined') {
-			requestAnimationFrame(updateCustomScrollbar);
+		queueScrollbarUpdate(true);
+	}
+
+	function queueScrollbarUpdate(settle = false) {
+		if (typeof window === 'undefined') return;
+		if (scrollbarUpdateQueued) return;
+		scrollbarUpdateQueued = true;
+		requestAnimationFrame(() => {
+			scrollbarUpdateQueued = false;
+			updateCustomScrollbar();
+			if (settle) {
+				requestAnimationFrame(updateCustomScrollbar);
+			}
+		});
+	}
+
+	function hasOverflow(scrollSize: number, clientSize: number): boolean {
+		return scrollSize - clientSize > 0.5;
+	}
+
+	function syncGridResizeObserverTargets() {
+		if (!gridResizeObserver) return;
+		if (observedGridWrapEl && observedGridWrapEl !== gridWrapEl) {
+			gridResizeObserver.unobserve(observedGridWrapEl);
+			observedGridWrapEl = null;
 		}
+		if (observedGridEl && observedGridEl !== gridEl) {
+			gridResizeObserver.unobserve(observedGridEl);
+			observedGridEl = null;
+		}
+		if (gridWrapEl && observedGridWrapEl !== gridWrapEl) {
+			gridResizeObserver.observe(gridWrapEl);
+			observedGridWrapEl = gridWrapEl;
+		}
+		if (gridEl && observedGridEl !== gridEl) {
+			gridResizeObserver.observe(gridEl);
+			observedGridEl = gridEl;
+		}
+	}
+
+	function logGridSizingDiagnostics(reason: string) {
+		if (!LOG_GRID_SIZING_DIAGNOSTICS) return;
+		if (!gridWrapEl || !gridEl || typeof window === 'undefined') return;
+
+		const minDayWidthRaw = getComputedStyle(gridWrapEl)
+			.getPropertyValue('--day-col-min-width')
+			.trim();
+		const minDayWidthPx = Number.parseFloat(minDayWidthRaw);
+		const dayHeaderCells = Array.from(gridEl.querySelectorAll<HTMLElement>('.dayhdr'));
+		const dayWidths = dayHeaderCells.map((element) => element.getBoundingClientRect().width);
+		const firstDayWidth = dayWidths[0] ?? 0;
+		const smallestDayWidth = dayWidths.length > 0 ? Math.min(...dayWidths) : 0;
+		const largestDayWidth = dayWidths.length > 0 ? Math.max(...dayWidths) : 0;
+		const hasHorizontalOverflow = hasOverflow(gridWrapEl.scrollWidth, gridWrapEl.clientWidth);
+		const hasVerticalOverflow = hasOverflow(gridWrapEl.scrollHeight, gridWrapEl.clientHeight);
+		const gridMinWidth = getComputedStyle(gridEl).minWidth;
+		const gridTemplateColumns = getComputedStyle(gridEl).gridTemplateColumns;
+
+		const logKey = [
+			reason,
+			Math.round(gridWrapEl.clientWidth),
+			Math.round(gridWrapEl.scrollWidth),
+			Math.round(gridWrapEl.clientHeight),
+			Math.round(gridWrapEl.scrollHeight),
+			Math.round(firstDayWidth * 10),
+			Math.round(smallestDayWidth * 10),
+			Math.round(largestDayWidth * 10),
+			Math.round((Number.isFinite(minDayWidthPx) ? minDayWidthPx : 0) * 10),
+			hasHorizontalOverflow ? '1' : '0',
+			hasVerticalOverflow ? '1' : '0',
+			showHorizontalScrollbar ? '1' : '0',
+			showVerticalScrollbar ? '1' : '0',
+			teamColumnCollapsed ? '1' : '0'
+		].join('|');
+
+		if (logKey === lastGridSizingLogKey) return;
+		lastGridSizingLogKey = logKey;
+
+		console.info('[ScheduleGrid sizing]', {
+			reason,
+			viewportWidth: window.innerWidth,
+			gridClientWidth: gridWrapEl.clientWidth,
+			gridScrollWidth: gridWrapEl.scrollWidth,
+			gridClientHeight: gridWrapEl.clientHeight,
+			gridScrollHeight: gridWrapEl.scrollHeight,
+			effectiveFixedColumnsWidthPx,
+			minimumGridWidthFromContent,
+			minimumGridWidthFloor,
+			gridMinWidth,
+			minDayWidthPx: Number.isFinite(minDayWidthPx) ? minDayWidthPx : minDayWidthRaw,
+			firstDayWidth,
+			smallestDayWidth,
+			largestDayWidth,
+			dayColumnCount: dayHeaderCells.length,
+			hasHorizontalOverflow,
+			hasVerticalOverflow,
+			showHorizontalScrollbar,
+			showVerticalScrollbar,
+			showTeamColumnRailToggle,
+			teamColumnCollapsed,
+			gridTemplateColumns
+		});
 	}
 
 	$: activeEventCodeItems = [
@@ -1225,6 +1543,12 @@
 		return 1;
 	}
 
+	function eventDisplayModeClass(displayMode: EventDisplayMode): string {
+		if (displayMode === 'Shift Override') return 'mode-shift-override';
+		if (displayMode === 'Schedule Overlay') return 'mode-schedule-overlay';
+		return 'mode-badge-indicator';
+	}
+
 	$: scopedPopupEvents = sortScopedEvents(scopedEventEntries);
 	$: scopedHoverEvents = sortScopedEvents(hoverTooltipEntries);
 
@@ -1237,6 +1561,21 @@
 		return `${groupName}::${employeeId}`;
 	}
 
+	function shiftAcronym(shiftName: string): string {
+		const words = shiftName
+			.trim()
+			.split(/\s+/)
+			.map((word) => word.replace(/[^A-Za-z0-9]/g, ''))
+			.filter((word) => word.length > 0);
+		if (words.length === 0) return '';
+		if (words.length === 1) return words[0].slice(0, 4).toUpperCase();
+		return words
+			.map((word) => word[0])
+			.join('')
+			.slice(0, 4)
+			.toUpperCase();
+	}
+
 	function handleRowSelect(rowKey: string) {
 		if (selectedRowKey === rowKey) {
 			selectedRowKey = null;
@@ -1245,6 +1584,27 @@
 		selectedRowKey = rowKey;
 		selectedDay = null;
 		selectedGroupIndex = null;
+	}
+
+	function handleSelectDayCell(rowKey: string, day: number) {
+		const key = `day:${rowKey}:${day}`;
+		if (
+			selectedCellKey === key &&
+			selectedRowKey === rowKey &&
+			selectedDay === day &&
+			selectedGroupIndex === null
+		) {
+			clearSelectionState();
+			return;
+		}
+		selectedRowKey = rowKey;
+		selectedDay = day;
+		selectedGroupIndex = null;
+		selectedCellKey = key;
+	}
+
+	function handleSelectCell(cellKey: string) {
+		selectedCellKey = cellKey || null;
 	}
 
 	function handleDaySelect(day: number) {
@@ -1256,6 +1616,7 @@
 		selectedRowKey = null;
 		selectedDay = day;
 		selectedGroupIndex = null;
+		selectedCellKey = `header-day:${day}`;
 	}
 
 	function handleGroupDaySelect(groupIndex: number, day: number) {
@@ -1269,10 +1630,28 @@
 		selectedGroupIndex = groupIndex;
 	}
 
+	function handleCollapsedShiftDaySelect(rowKey: string, groupIndex: number, day: number) {
+		const key = `collapsed-shift-day:${groupIndex}:${day}`;
+		if (
+			selectedCellKey === key &&
+			selectedRowKey === rowKey &&
+			selectedDay === day &&
+			selectedGroupIndex === null
+		) {
+			clearSelectionState();
+			return;
+		}
+		selectedRowKey = rowKey;
+		selectedDay = day;
+		selectedGroupIndex = null;
+		selectedCellKey = key;
+	}
+
 	function clearSelectionState() {
 		selectedRowKey = null;
 		selectedDay = null;
 		selectedGroupIndex = null;
+		selectedCellKey = null;
 	}
 
 	function clamp(value: number, min: number, max: number): number {
@@ -1473,16 +1852,78 @@
 		return Number.isFinite(parsed) ? parsed : fallback;
 	}
 
+	function updateFixedScrollbarRailStyles() {
+		if (!gridWrapEl || typeof window === 'undefined') return;
+
+		const rect = gridWrapEl.getBoundingClientRect();
+		const viewportWidth = window.innerWidth;
+		const viewportHeight = window.innerHeight;
+		const railSize = readCssPx('--scrollbar-size', 8);
+		const headerRowHeight = readCssPx('--schedule-header-row-height', 44);
+
+		const horizontalMarginLeft = 12;
+		const horizontalMarginRight = 12;
+		const horizontalOffsetBottom = 5;
+		const verticalMarginTop = 8;
+		const verticalMarginBottom = 8;
+		const verticalOffsetRight = 5;
+		const stickyBoundaryEls = gridWrapEl.querySelectorAll<HTMLElement>(
+			'.teamHeaderMerged, .teamColumnRailToggle'
+		);
+		let stickyBoundaryRight = rect.left;
+		stickyBoundaryEls.forEach((element) => {
+			stickyBoundaryRight = Math.max(stickyBoundaryRight, element.getBoundingClientRect().right);
+		});
+
+		const visibleTop = clamp(rect.top, 0, viewportHeight);
+		const visibleBottom = clamp(rect.bottom, 0, viewportHeight);
+		const visibleLeft = clamp(rect.left, 0, viewportWidth);
+		const visibleRight = clamp(rect.right, 0, viewportWidth);
+
+		const horizontalTop = Math.round(
+			clamp(
+				visibleBottom - horizontalOffsetBottom - railSize,
+				0,
+				Math.max(viewportHeight - railSize, 0)
+			)
+		);
+		const horizontalLeft = Math.round(
+			clamp(stickyBoundaryRight + horizontalMarginLeft, visibleLeft, visibleRight)
+		);
+		const horizontalRightInset =
+			horizontalMarginRight + (showVerticalScrollbar ? railSize + verticalOffsetRight : 0);
+		const horizontalRight = Math.round(
+			clamp(rect.right - horizontalRightInset, visibleLeft, visibleRight)
+		);
+		const horizontalWidth = Math.max(horizontalRight - horizontalLeft, 0);
+
+		const verticalLeft = Math.round(
+			clamp(rect.right - verticalOffsetRight - railSize, visibleLeft, visibleRight)
+		);
+		const verticalTop = Math.round(
+			clamp(rect.top + verticalMarginTop + headerRowHeight, visibleTop, visibleBottom)
+		);
+		const verticalBottomInset =
+			verticalMarginBottom + (showHorizontalScrollbar ? railSize + horizontalOffsetBottom : 0);
+		const verticalBottom = Math.round(
+			clamp(rect.bottom - verticalBottomInset, visibleTop, visibleBottom)
+		);
+		const verticalHeight = Math.max(verticalBottom - verticalTop, 0);
+
+		horizontalRailStyle = `left:${horizontalLeft}px;top:${horizontalTop}px;width:${horizontalWidth}px;`;
+		verticalRailStyle = `left:${verticalLeft}px;top:${verticalTop}px;height:${verticalHeight}px;`;
+	}
+
 	function updateRowDensity() {
 		if (!gridWrapEl || !gridEl) return;
 
 		const minRowHeight = readCssPx('--schedule-row-min-height', 25);
 		const maxRowHeight = readCssPx('--schedule-row-max-height', 44);
 		const headerRowHeight = readCssPx('--schedule-header-row-height', 44);
-		const userRowCount = groups.reduce(
-			(total, group) => total + (collapsed[group.category] ? 0 : group.employees.length),
-			0
-		);
+		const userRowCount = groups.reduce((total, group) => {
+			if (collapsed[group.category]) return total;
+			return total + group.employees.length;
+		}, 0);
 
 		if (userRowCount <= 0) {
 			const roundedMax = Math.round(maxRowHeight);
@@ -1519,13 +1960,16 @@
 			horizontalThumbLeftPx = 0;
 			verticalThumbHeightPx = 0;
 			verticalThumbTopPx = 0;
+			horizontalRailStyle = '';
+			verticalRailStyle = '';
+			logGridSizingDiagnostics('custom-scrollbars-disabled');
 			return;
 		}
 
 		const scrollWidth = gridWrapEl.scrollWidth;
 		const clientWidth = gridWrapEl.clientWidth;
 		const scrollLeft = gridWrapEl.scrollLeft;
-		const hasHorizontalOverflow = scrollWidth > clientWidth + 1;
+		const hasHorizontalOverflow = hasOverflow(scrollWidth, clientWidth);
 
 		showHorizontalScrollbar = hasHorizontalOverflow;
 		if (!hasHorizontalOverflow) {
@@ -1551,12 +1995,14 @@
 		const scrollHeight = gridWrapEl.scrollHeight;
 		const clientHeight = gridWrapEl.clientHeight;
 		const scrollTop = gridWrapEl.scrollTop;
-		const hasVerticalOverflow = scrollHeight > clientHeight + 1;
+		const hasVerticalOverflow = hasOverflow(scrollHeight, clientHeight);
 
 		showVerticalScrollbar = hasVerticalOverflow;
 		if (!hasVerticalOverflow) {
 			verticalThumbHeightPx = 0;
 			verticalThumbTopPx = 0;
+			updateFixedScrollbarRailStyles();
+			logGridSizingDiagnostics('vertical-overflow-cleared');
 			return;
 		}
 
@@ -1574,6 +2020,8 @@
 
 		verticalThumbHeightPx = nextThumbHeight;
 		verticalThumbTopPx = clamp(nextThumbTop, 0, maxThumbTop);
+		updateFixedScrollbarRailStyles();
+		logGridSizingDiagnostics('scrollbar-updated');
 	}
 
 	function onGridScroll() {
@@ -1709,28 +2157,71 @@
 
 	onMount(() => {
 		mounted = true;
+		let hoverCapabilityMediaQuery: MediaQueryList | null = null;
+		const applyHoverCapability = () => {
+			const canHover =
+				typeof window !== 'undefined' &&
+				typeof window.matchMedia === 'function' &&
+				window.matchMedia('(any-hover: hover) and (any-pointer: fine)').matches;
+			canUseHoverTooltips = canHover;
+			if (!canHover) {
+				hideHoverEventsTooltip();
+			}
+		};
 		if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
-			useCustomGridScrollbars = !window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+			useCustomGridScrollbars = true;
+			hoverCapabilityMediaQuery = window.matchMedia('(any-hover: hover) and (any-pointer: fine)');
+			applyHoverCapability();
+			if (typeof hoverCapabilityMediaQuery.addEventListener === 'function') {
+				hoverCapabilityMediaQuery.addEventListener('change', applyHoverCapability);
+			} else {
+				hoverCapabilityMediaQuery.addListener(applyHoverCapability);
+			}
 		}
 		queueMeasure();
 		updateRowDensity();
-		requestAnimationFrame(updateCustomScrollbar);
+		queueScrollbarUpdate(true);
+		if (typeof ResizeObserver !== 'undefined') {
+			gridResizeObserver = new ResizeObserver(() => {
+				queueScrollbarUpdate(true);
+			});
+			syncGridResizeObserverTargets();
+		}
 		const onResize = () => {
 			queueMeasure();
 			updateRowDensity();
-			updateCustomScrollbar();
+			queueScrollbarUpdate(true);
 			updateMemberEventsModalScrollbar();
 		};
+		const onViewportScroll = () => {
+			updateFixedScrollbarRailStyles();
+		};
 		window.addEventListener('resize', onResize);
+		window.addEventListener('scroll', onViewportScroll, true);
 		return () => {
 			window.removeEventListener('resize', onResize);
+			window.removeEventListener('scroll', onViewportScroll, true);
+			if (gridResizeObserver) {
+				gridResizeObserver.disconnect();
+				gridResizeObserver = null;
+			}
+			observedGridWrapEl = null;
+			observedGridEl = null;
+			if (hoverCapabilityMediaQuery) {
+				if (typeof hoverCapabilityMediaQuery.removeEventListener === 'function') {
+					hoverCapabilityMediaQuery.removeEventListener('change', applyHoverCapability);
+				} else {
+					hoverCapabilityMediaQuery.removeListener(applyHoverCapability);
+				}
+			}
 		};
 	});
 
 	afterUpdate(() => {
 		queueMeasure();
 		updateRowDensity();
-		updateCustomScrollbar();
+		syncGridResizeObserverTargets();
+		queueScrollbarUpdate(true);
 		if (memberEventsPopupOpen) {
 			updateMemberEventsModalScrollbar();
 		}
@@ -1794,7 +2285,7 @@
 </script>
 
 <div
-	class="gridwrapShell"
+	class="gridwrapShell shiftMergeLayout"
 	class:mobileTeamColumnCollapsed={teamColumnCollapsed}
 	style={gridShellStyle}
 >
@@ -1818,7 +2309,7 @@
 			bind:this={gridEl}
 		>
 			{#if activeTodayDay}
-				<div class="today-band" bind:this={bandEl}></div>
+				<!-- div class="today-band" bind:this={bandEl}><!/div-->
 			{/if}
 			{#if selectedDay && selectedGroupIndex === null}
 				<div class="selected-day-band" bind:this={selectedBandEl}></div>
@@ -1829,9 +2320,10 @@
 
 			{#if canMaintainTeam}
 				<div
-					class="cell hdr namecol teamHeader clickable"
+					class="cell hdr namecol teamHeader teamHeaderMerged clickable"
 					role="button"
 					tabindex="0"
+					title="Team"
 					aria-label="Configure team and schedule setup"
 					on:click={activateTeamCell}
 					on:keydown={(event) => {
@@ -1844,7 +2336,7 @@
 					<div class="groupRow">Team</div>
 				</div>
 			{:else}
-				<div class="cell hdr namecol teamHeader" role="columnheader">
+				<div class="cell hdr namecol teamHeader teamHeaderMerged" role="columnheader" title="Team">
 					<div class="groupRow">Team</div>
 				</div>
 			{/if}
@@ -1854,7 +2346,7 @@
 					role="button"
 					tabindex="0"
 					aria-pressed={!teamColumnCollapsed}
-					aria-label={teamColumnCollapsed ? 'Show team column' : 'Hide team column'}
+					aria-label={teamColumnCollapsed ? 'Expand team columns' : 'Collapse team columns'}
 					on:click={toggleTeamColumnVisibility}
 					on:keydown={(event) => {
 						if (event.key === 'Enter' || event.key === ' ') {
@@ -1868,7 +2360,7 @@
 			{#each days as day (day.day)}
 				{@const headerVisuals = dayHeaderEventVisuals.get(day.day)}
 				<div
-					class={`${dayHeaderClass(day)} selectableColumnHeader${selectedDay === day.day && selectedGroupIndex === null ? ' columnSelected colStart' : ''}`}
+					class={`${dayHeaderClass(day)} selectableColumnHeader${selectedDay === day.day && selectedGroupIndex === null ? ' columnSelected colStart' : ''}${selectedCellKey === `header-day:${day.day}` ? ' cellSelected' : ''}`}
 					data-day={day.day}
 					role="columnheader"
 					aria-label={dayAriaLabel(day)}
@@ -1880,7 +2372,10 @@
 							handleDaySelect(day.day);
 						}
 					}}
-					on:dblclick={() => handleDayHeaderDoubleClick(day)}
+					on:contextmenu={(event) => {
+						event.preventDefault();
+						handleDayHeaderDoubleClick(day);
+					}}
 					on:touchend={(event) => handleDayHeaderTouchEnd(day, event)}
 					on:mouseenter={(event) =>
 						handleDayHeaderHover(day, { clientX: event.clientX, clientY: event.clientY })}
@@ -1923,28 +2418,69 @@
 			{/each}
 
 			{#each groups as group, groupIndex (group.category)}
-				<GroupRow
-					groupName={group.category}
-					employeeTypeId={group.employeeTypeId ?? null}
-					{events}
-					{selectedYear}
-					{selectedMonthIndex}
-					employeeCount={group.employees.length}
-					collapsed={collapsed[group.category] === true}
-					{monthDays}
-					{selectedDay}
-					{selectedGroupIndex}
-					{groupIndex}
-					isLastVisibleRow={groupIndex === groups.length - 1 &&
-						(collapsed[group.category] === true || group.employees.length === 0)}
-					onSelectDay={(day) => handleGroupDaySelect(groupIndex, day)}
-					onDoubleClickDay={(day) => handleGroupDayDoubleClick(group, day)}
-					onHoverDayCell={(day, _cellEl, pointer) => handleGroupDayHover(group, day, pointer)}
-					onLeaveDayCell={hideHoverEventsTooltip}
-					onToggle={() => onToggleGroup(group)}
-				/>
-
-				{#if !collapsed[group.category]}
+				{#if collapsed[group.category] || group.employees.length === 0}
+					{@const collapsedRowKey = `collapsed-shift:${group.category}:${groupIndex}`}
+					<GroupRow
+						groupName={group.category}
+						employeeTypeId={group.employeeTypeId ?? null}
+						{events}
+						{selectedYear}
+						{selectedMonthIndex}
+						employeeCount={group.employees.length}
+						collapsed={collapsed[group.category] === true}
+						{monthDays}
+						{selectedDay}
+						{selectedGroupIndex}
+						{selectedCellKey}
+						{selectedRowKey}
+						rowKey={collapsedRowKey}
+						{groupIndex}
+						mergeFirstTwoColumns={true}
+						isLastVisibleRow={groupIndex === groups.length - 1}
+						onSelectDay={(day) => handleSelectDayCell(collapsedRowKey, day)}
+						onDoubleClickDay={(day) => handleGroupDayDoubleClick(group, day)}
+						onShiftCellContextMenu={(event) => handleShiftCellContextMenu(event, group)}
+						onHoverShiftCell={(pointer) => void showShiftMonthHoverTooltip(group, pointer)}
+						onLeaveShiftCell={hideHoverEventsTooltip}
+						onHoverDayCell={(day, _cellEl, pointer) => handleGroupDayHover(group, day, pointer)}
+						onLeaveDayCell={hideHoverEventsTooltip}
+						onToggle={() => onToggleGroup(group)}
+					/>
+				{:else}
+					<div
+						class={`cell shiftRowCell shiftMergeCol shiftMergeToggle groupBoundary${groupIndex === groups.length - 1 ? ' lastVisibleRowBoundary' : ''}${group.employees.length > 1 ? ' shiftMergeDiagonal' : ''}`}
+						role="button"
+						tabindex="0"
+						aria-expanded="true"
+						aria-label={`Collapse ${group.category}`}
+						style={`grid-row: span ${group.employees.length};`}
+						on:click={() => onToggleGroup(group)}
+						on:contextmenu={(event) => handleShiftCellContextMenu(event, group)}
+						on:mouseenter={(event) =>
+							void showShiftMonthHoverTooltip(group, {
+								clientX: event.clientX,
+								clientY: event.clientY
+							})}
+						on:mousemove={(event) =>
+							void showShiftMonthHoverTooltip(group, {
+								clientX: event.clientX,
+								clientY: event.clientY
+							})}
+						on:mouseleave={hideHoverEventsTooltip}
+						on:keydown={(event) => {
+							if (event.key === 'Enter' || event.key === ' ') {
+								event.preventDefault();
+								onToggleGroup(group);
+							}
+						}}
+					>
+						<div class="shiftMergeLabel">
+							<span class="caret" aria-hidden="true">▾</span>
+							<strong class={group.employees.length > 1 ? 'diagonalShiftLabel' : ''}>
+								{shiftAcronym(group.category)}
+							</strong>
+						</div>
+					</div>
 					{#each group.employees as employee, employeeIndex (employee.userOid ?? `${group.category}:${employee.name}:${employeeIndex}`)}
 						<EmployeeRow
 							{employee}
@@ -1960,13 +2496,20 @@
 							{groupIndex}
 							isLastVisibleRow={groupIndex === groups.length - 1 &&
 								employeeIndex === group.employees.length - 1}
+							isFirstInGroup={employeeIndex === 0}
 							isLastInGroup={employeeIndex === group.employees.length - 1}
 							onOpenDisplayNameEditor={onEmployeeDoubleClick}
 							rowKey={makeRowKey(group.category, employee.userOid ?? employee.name)}
 							{selectedRowKey}
+							{selectedCellKey}
 							onSelectRow={handleRowSelect}
+							onSelectCell={handleSelectCell}
+							onSelectDayCell={handleSelectDayCell}
 							onDoubleClickDayCell={(employee, day) =>
 								handleEmployeeDayDoubleClick(employee, group.employeeTypeId ?? null, day)}
+							onHoverNameCell={(pointer) =>
+								void showUserMonthHoverTooltip(employee, group.employeeTypeId ?? null, pointer)}
+							onLeaveNameCell={hideHoverEventsTooltip}
 							onHoverDayCell={(day, _cellEl, pointer) =>
 								handleEmployeeDayHover(employee, group.employeeTypeId ?? null, day, pointer)}
 							onLeaveDayCell={hideHoverEventsTooltip}
@@ -1989,28 +2532,32 @@
 				<div class="memberEventEmptyRow">Loading events...</div>
 			{:else}
 				<div class="memberEventsRows">
-					{#each scopedHoverEvents as eventRow (eventRow.eventId)}
-						{@const scopeSuffix = eventScopeSuffix(eventRow, hoverTooltipScopeType)}
-						<div class="memberEventRow">
-							<div class="memberEventCodeLine">
-								<span
-									class="memberEventColorDot"
-									style={`background:${eventRow.eventCodeColor};`}
-									aria-hidden="true"
-								></span>
-								<strong>{eventRow.eventCodeCode}</strong>
-								<span>{eventRow.eventCodeName}{scopeSuffix ? ` - ${scopeSuffix}` : ''}</span>
-							</div>
-							{#if eventRow.startDate !== eventRow.endDate}
-								<div class="memberEventDates">
-									{formatIsoDate(eventRow.startDate)} to {formatIsoDate(eventRow.endDate)}
+					{#if scopedHoverEvents.length === 0}
+						<div class="memberEventEmptyRow">No Events</div>
+					{:else}
+						{#each scopedHoverEvents as eventRow (eventRow.eventId)}
+							{@const scopeSuffix = eventScopeSuffix(eventRow, hoverTooltipScopeType)}
+							<div class="memberEventRow">
+								<div class="memberEventCodeLine">
+									<span
+										class={`memberEventColorDot ${eventDisplayModeClass(eventRow.eventDisplayMode)}`}
+										style={`background:${eventRow.eventCodeColor};`}
+										aria-hidden="true"
+									></span>
+									<strong>{eventRow.eventCodeCode}</strong>
+									<span>{eventRow.eventCodeName}{scopeSuffix ? ` - ${scopeSuffix}` : ''}</span>
 								</div>
-							{/if}
-							{#if eventRow.comments}
-								<div class="memberEventComment">{eventRow.comments}</div>
-							{/if}
-						</div>
-					{/each}
+								{#if hoverTooltipWindowMode === 'shift-month' || eventRow.startDate !== eventRow.endDate}
+									<div class="memberEventDates">
+										{formatEventDateOrRange(eventRow.startDate, eventRow.endDate)}
+									</div>
+								{/if}
+								{#if eventRow.comments}
+									<div class="memberEventComment">{eventRow.comments}</div>
+								{/if}
+							</div>
+						{/each}
+					{/if}
 				</div>
 			{/if}
 		</div>
@@ -2069,16 +2616,16 @@
 									>
 										<div class="memberEventCodeLine">
 											<span
-												class="memberEventColorDot"
+												class={`memberEventColorDot ${eventDisplayModeClass(eventRow.eventDisplayMode)}`}
 												style={`background:${eventRow.eventCodeColor};`}
 												aria-hidden="true"
 											></span>
 											<strong>{eventRow.eventCodeCode}</strong>
 											<span>{eventRow.eventCodeName}{scopeSuffix ? ` - ${scopeSuffix}` : ''}</span>
 										</div>
-										{#if eventRow.startDate !== eventRow.endDate}
+										{#if memberEventsPopupWindowMode === 'shift-month' || eventRow.startDate !== eventRow.endDate}
 											<div class="memberEventDates">
-												{formatIsoDate(eventRow.startDate)} to {formatIsoDate(eventRow.endDate)}
+												{formatEventDateOrRange(eventRow.startDate, eventRow.endDate)}
 											</div>
 										{/if}
 										{#if eventRow.comments}
@@ -2465,7 +3012,9 @@
 									disabled={eventSaveInProgress}
 								>
 									<svg viewBox="0 0 24 24" aria-hidden="true">
-										<path d="M 2 4 h 20 M 6 4 V 1 h 12 v 3 M 2 6 h 20 M 4 6 l 1 15 h 13 L 20 6 M 9.5 8.5 v 10 M 14.5 8.5 v 10" />
+										<path
+											d="M 2 4 h 20 M 6 4 V 1 h 12 v 3 M 2 6 h 20 M 4 6 l 1 15 h 13 L 20 6 M 9.5 8.5 v 10 M 14.5 8.5 v 10"
+										/>
 									</svg>
 									Remove
 								</button>
@@ -2515,6 +3064,7 @@
 			class="gridScrollRailHorizontal"
 			role="presentation"
 			aria-hidden="true"
+			style={horizontalRailStyle}
 			bind:this={horizontalRailEl}
 			on:mousedown={handleHorizontalRailClick}
 		>
@@ -2532,6 +3082,7 @@
 			class="gridScrollRailVertical"
 			role="presentation"
 			aria-hidden="true"
+			style={verticalRailStyle}
 			bind:this={verticalRailEl}
 			on:mousedown={handleVerticalRailClick}
 		>
@@ -2545,3 +3096,134 @@
 		</div>
 	{/if}
 </div>
+
+<style>
+	:global(.shiftMergeLayout) {
+		--group-divider-width: 1px;
+		--group-divider-bottom-width: 2px;
+		--group-divider-color: color-mix(in srgb, var(--table-border-color), #000 24%);
+	}
+
+	:global(:root[data-theme='dark'] .shiftMergeLayout) {
+		--group-divider-color: color-mix(in srgb, var(--table-border-color), #fff 24%);
+	}
+
+	:global(.shiftMergeLayout .grid) {
+		grid-auto-flow: row dense;
+	}
+
+	:global(.shiftMergeLayout .cell.cellSelected) {
+		box-shadow: inset 0 0 0 2px var(--interactive-border-hover);
+		z-index: 34;
+	}
+
+	:global(.shiftMergeLayout .namecol) {
+		left: var(--shift-col-width, clamp(120px, 12vw, 180px));
+		grid-column: 2;
+	}
+
+	:global(.shiftMergeLayout .teamColumnRailToggle) {
+		left: calc(var(--shift-col-width, clamp(44px, 5vw, 64px)) + var(--team-col-width, 27ch));
+		grid-column: 3;
+	}
+
+	:global(.shiftMergeLayout .shiftRowCell.namecol.mergeTwoCols) {
+		left: 0;
+		grid-column: 1 / span 2;
+		z-index: 33;
+	}
+
+	:global(.shiftMergeLayout .teamHeaderMerged) {
+		left: 0;
+		grid-column: 1 / span 2;
+		z-index: 42;
+	}
+
+	:global(.shiftMergeLayout .shiftMergeCol) {
+		position: sticky;
+		left: 0;
+		z-index: 31;
+		grid-column: 1;
+		background: var(--table-team-cell-bg);
+		border-right: 1px solid var(--table-border-color);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 0;
+	}
+
+	:global(.shiftMergeLayout .shiftMergeCol.groupBoundary) {
+		border-top: var(--group-divider-width) solid var(--group-divider-color);
+	}
+
+	:global(.shiftMergeLayout .employeeRowCell.groupStartBorder) {
+		border-top: var(--group-divider-width) solid var(--group-divider-color);
+	}
+
+	:global(.shiftMergeLayout .shiftRowCell.collapsedGroupBoundary) {
+		border-top: var(--group-divider-width) solid var(--group-divider-color);
+	}
+
+	:global(.shiftMergeLayout .employeeRowCell.lastVisibleRowBoundary) {
+		border-bottom: var(--group-divider-bottom-width) solid var(--group-divider-color);
+	}
+
+	:global(.shiftMergeLayout .shiftMergeCol.lastVisibleRowBoundary) {
+		border-bottom: var(--group-divider-bottom-width) solid var(--group-divider-color);
+	}
+
+	:global(.shiftMergeLayout .shiftRowCell.collapsedGroupBoundary.lastVisibleRowBoundary) {
+		border-bottom: var(--group-divider-bottom-width) solid var(--group-divider-color);
+	}
+
+	:global(.shiftMergeLayout .shiftMergeToggle) {
+		cursor: pointer;
+		--cell-hover-overlay: var(--team-cell-hover);
+	}
+
+	:global(.shiftMergeLayout .shiftMergeToggle:active) {
+		--cell-hover-overlay: var(--team-cell-active);
+	}
+
+	:global(.shiftMergeLayout .shiftMergeToggle:focus-visible) {
+		outline: none;
+		box-shadow: inset 0 0 0 2px var(--interactive-border-hover);
+	}
+
+	:global(.shiftMergeLayout .shiftMergeLabel) {
+		width: 100%;
+		display: flex;
+		flex-direction: row;
+		align-items: center;
+		justify-content: center;
+		gap: 4px;
+		padding: 4px 2px;
+		overflow: hidden;
+		text-align: center;
+	}
+
+	:global(.shiftMergeLayout .shiftMergeLabel .caret) {
+		font-size: 0.72rem;
+		line-height: 1;
+	}
+
+	:global(.shiftMergeLayout .shiftMergeLabel strong) {
+		font-size: 0.68rem;
+		line-height: 1.05;
+		letter-spacing: 0.01em;
+	}
+
+	:global(.shiftMergeLayout .shiftMergeDiagonal .shiftMergeLabel) {
+		padding: 4px 2px;
+	}
+
+	:global(.shiftMergeLayout .shiftMergeDiagonal .diagonalShiftLabel) {
+		display: inline-block;
+		transform: none;
+		transform-origin: center;
+		white-space: nowrap;
+		font-size: 0.68rem;
+		letter-spacing: 0.02em;
+		margin-right: 5px;
+	}
+</style>

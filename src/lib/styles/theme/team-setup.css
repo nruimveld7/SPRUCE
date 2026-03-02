@@ -984,6 +984,19 @@ body.teamShiftRowDragging {
   border: 1px solid rgba(255, 255, 255, 0.5);
 }
 
+.eventCodeColorDot.mode-badge-indicator {
+  border-radius: 999px;
+}
+
+.eventCodeColorDot.mode-shift-override {
+  border-radius: 3px;
+}
+
+.eventCodeColorDot.mode-schedule-overlay {
+  border-radius: 2px;
+  transform: rotate(45deg);
+}
+
 .eventCodeStatusPill {
   display: inline-flex;
   align-items: center;

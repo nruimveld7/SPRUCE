@@ -1,7 +1,45 @@
 @media (max-width: 900px) {
-  .monthbar-inner {
+  .topbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "title actions"
+      "center center";
+    row-gap: 10px;
+  }
+
+  .topbarTitleSlot {
+    grid-area: title;
+  }
+
+  .topbarActions {
+    grid-area: actions;
+  }
+
+  .topbarCenter {
+    grid-area: center;
+    width: 100%;
+    max-width: 360px;
+  }
+
+  .monthCalendarView {
+    --month-calendar-cell-min-height: 56px;
+    --month-calendar-cell-min-width: 68px;
+    padding: 8px;
+    gap: 6px;
+  }
+
+  .monthCalendarGrid,
+  .monthCalendarWeekdays {
+    gap: 4px;
+  }
+
+  .monthCalendarScopeRow {
     flex-direction: column;
-    align-items: flex-start;
+    align-items: stretch;
+  }
+
+  .monthCalendarScopeCombo {
+    max-width: none;
   }
 
 }

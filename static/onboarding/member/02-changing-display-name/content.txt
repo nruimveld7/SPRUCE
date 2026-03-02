@@ -1,4 +1,4 @@
 Changing Display Name
 You can set your display name directly from the schedule display.
 
-Double-click the cell with your own name to open the display name editor.
+Right click the cell with your own name to open the display name editor.

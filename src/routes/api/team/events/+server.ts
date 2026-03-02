@@ -796,6 +796,7 @@ export const GET: RequestHandler = async ({ locals, cookies, url }) => {
 			eventCodeName,
 			scopeType,
 			employeeTypeId,
+			userOid,
 			eventDisplayMode:
 				(coverageCodeId ? row.CoverageDisplayMode : row.CustomDisplayMode) ?? 'Schedule Overlay',
 			eventCodeColor: (coverageCodeId ? row.CoverageColor : row.CustomColor)?.trim() || '#22c55e',
@@ -1027,7 +1028,8 @@ export const POST: RequestHandler = async ({ locals, cookies, request }) => {
 					intendedRecipients,
 					targetMemberName,
 					eventName: notificationEventName,
-					date: formatEventDateForEmail(startDate, endDate)
+					date: formatEventDateForEmail(startDate, endDate),
+					comments
 				});
 			}
 		} catch (notificationError) {
@@ -1340,7 +1342,8 @@ export const PATCH: RequestHandler = async ({ locals, cookies, request }) => {
 					intendedRecipients,
 					targetMemberName,
 					eventName: notificationEventName,
-					date: formatEventDateForEmail(startDate, endDate)
+					date: formatEventDateForEmail(startDate, endDate),
+					comments
 				});
 			}
 		} catch (notificationError) {
