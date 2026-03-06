@@ -1,6 +1,6 @@
-# Shift Schedule
+# SPRUCE 
 
-SPRUCE (Shift Planning, Rostering, and User Coverage Engine) is the internal codename for this Shift Schedule project.
+Shift Planning, Rostering, and User Coverage Engine
 
 Database-first shift scheduling application built with SvelteKit + TypeScript, backed by Microsoft SQL Server, with Microsoft Entra ID authentication.
 
