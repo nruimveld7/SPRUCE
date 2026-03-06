@@ -11,7 +11,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		throw redirect(302, '/auth/login');
 	}
 	const access = await getAccessState(user.id);
-	if (!access.isBootstrap) {
+	if (!access.isBootstrap || access.hasSchedules) {
 		throw redirect(302, '/');
 	}
 	return { user };
@@ -24,7 +24,7 @@ export const actions: Actions = {
 			throw redirect(302, '/auth/login');
 		}
 		const access = await getAccessState(user.id);
-		if (!access.isBootstrap) {
+		if (!access.isBootstrap || access.hasSchedules) {
 			throw redirect(302, '/');
 		}
 

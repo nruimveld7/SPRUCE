@@ -1,5 +1,7 @@
 # Shift Schedule
 
+SPRUCE (Shift Planning, Rostering, and User Coverage Engine) is the internal codename for this Shift Schedule project.
+
 Database-first shift scheduling application built with SvelteKit + TypeScript, backed by Microsoft SQL Server, with Microsoft Entra ID authentication.
 
 ## Purpose
@@ -98,7 +100,7 @@ Used by app and DB connection logic:
 
 ## Local Development
 
-From this project directory (`shiftschedule`):
+From this project directory (`spruce`):
 
 Start dev stack:
 ```bash
@@ -112,12 +114,12 @@ Stop dev stack:
 
 Apply schema:
 ```bash
-/bin/bash -lc "set -a; source ../.env.dev; set +a; ../scripts/SqlRun.sh dev shiftschedule < db/schema.sql"
+/bin/bash -lc "set -a; source ../.env.dev; set +a; ../scripts/SqlRun.sh dev spruce < db/schema.sql"
 ```
 
 Optional seed data:
 ```bash
-/bin/bash -lc "set -a; source ../.env.dev; set +a; ../scripts/SqlRun.sh dev shiftschedule < db/seed.sql"
+/bin/bash -lc "set -a; source ../.env.dev; set +a; ../scripts/SqlRun.sh dev spruce < db/seed.sql"
 ```
 
 Run app checks from this directory:
