@@ -19,7 +19,7 @@ Core goals:
 - Database: Microsoft SQL Server
 - Auth: Microsoft Entra ID (OIDC + PKCE + certificate-based client assertion)
 - Session store: SQL table `dbo.UserSessions`
-- Runtime/deployment for local: Docker Compose + nginx reverse proxy
+- Runtime/deployment: Node.js (with optional container images via `Dockerfile`/`Dockerfile.dev`)
 
 ## Project Layout
 
@@ -79,13 +79,10 @@ Schema notes:
 
 ## Prerequisites
 
-- Docker + Docker Compose
-- Yarn (project uses Yarn 4)
-- Parent compose directory with env files and scripts:
-  - `../.env.dev`
-  - `../scripts/StartDev.sh`
-  - `../scripts/StopDev.sh`
-  - `../scripts/SqlRun.sh`
+- Node.js 20+
+- Yarn (project uses Yarn 4; see `packageManager` in `package.json`)
+- Microsoft SQL Server instance accessible from this app
+- Microsoft Entra app registration and certificates for OIDC login
 
 ## Environment Variables
 
@@ -94,32 +91,30 @@ Used by app and DB connection logic:
 - SQL: `MSSQL_HOST`, `MSSQL_PORT`, `MSSQL_USER`, `MSSQL_PASSWORD`, `MSSQL_DATABASE`, `MSSQL_ENCRYPT`, `MSSQL_TRUST_SERVER_CERT`
 - Entra/Auth: `ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID`, `ENTRA_REDIRECT_URI`, `ENTRA_CLIENT_CERT_PRIVATE_KEY_PATH`, `ENTRA_CLIENT_CERT_PUBLIC_CERT_PATH`
 - App: `APP_SESSION_SECRET`, `BOOTSTRAP_MANAGER_OIDS`
-- SQL container helper scripts: `SA_PASSWORD`
+- Optional (dev API guard): `DEV_CONSOLE_ALLOWED_OIDS`
 
 `BOOTSTRAP_MANAGER_OIDS` accepts comma, semicolon, or whitespace delimiters.
 
 ## Local Development
 
-From this project directory (`spruce`):
-
-Start dev stack:
+Install dependencies:
 ```bash
-../scripts/StartDev.sh
+yarn install
 ```
 
-Stop dev stack:
+Run the app in dev mode:
 ```bash
-../scripts/StopDev.sh
+yarn dev
 ```
 
-Apply schema:
+Apply schema (example using `sqlcmd`):
 ```bash
-/bin/bash -lc "set -a; source ../.env.dev; set +a; ../scripts/SqlRun.sh dev spruce < db/schema.sql"
+sqlcmd -S "$MSSQL_HOST,$MSSQL_PORT" -U "$MSSQL_USER" -P "$MSSQL_PASSWORD" -d "$MSSQL_DATABASE" -i db/schema.sql -C
 ```
 
 Optional seed data:
 ```bash
-/bin/bash -lc "set -a; source ../.env.dev; set +a; ../scripts/SqlRun.sh dev spruce < db/seed.sql"
+sqlcmd -S "$MSSQL_HOST,$MSSQL_PORT" -U "$MSSQL_USER" -P "$MSSQL_PASSWORD" -d "$MSSQL_DATABASE" -i db/seed.sql -C
 ```
 
 Run app checks from this directory:
@@ -127,6 +122,11 @@ Run app checks from this directory:
 yarn check
 yarn lint
 yarn test:unit
+```
+
+Build for production:
+```bash
+yarn build
 ```
 
 ## First-Time Setup Flow
