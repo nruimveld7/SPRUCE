@@ -89,9 +89,45 @@ function pkceChallenge(verifier: string): string {
 	return base64urlFromBuffer(digest);
 }
 
-export async function getAuthorizeUrl(_url: URL) {
+function firstForwardedValue(value: string | null): string | null {
+	if (!value) return null;
+	const first = value.split(',')[0]?.trim();
+	return first || null;
+}
+
+function resolveRequestOrigin(url: URL, headers?: Headers): string {
+	if (!headers) return url.origin;
+	const forwardedProto = firstForwardedValue(headers.get('x-forwarded-proto'));
+	const forwardedHost = firstForwardedValue(headers.get('x-forwarded-host'));
+	const host = forwardedHost ?? firstForwardedValue(headers.get('host'));
+	const proto = forwardedProto && /^(https?)$/i.test(forwardedProto) ? forwardedProto : null;
+	if (proto && host) {
+		return `${proto}://${host}`;
+	}
+	return url.origin;
+}
+
+function resolveRedirectUri(url: URL, headers?: Headers): string {
+	const origin = resolveRequestOrigin(url, headers);
+	const configured = env.ENTRA_REDIRECT_URI?.trim();
+	const forceConfigured = (env.ENTRA_REDIRECT_URI_FORCE ?? '').trim().toLowerCase() === 'true';
+	if (configured && forceConfigured) {
+		return configured;
+	}
+	if (configured) {
+		try {
+			const parsed = new URL(configured);
+			return new URL(`${parsed.pathname}${parsed.search}`, origin).toString();
+		} catch {
+			// Ignore invalid configured URI and fall back to request-derived callback.
+		}
+	}
+	return new URL('/auth/callback', origin).toString();
+}
+
+export async function getAuthorizeUrl(url: URL, headers?: Headers) {
 	const clientId = requireEnv('ENTRA_CLIENT_ID');
-	const redirectUri = requireEnv('ENTRA_REDIRECT_URI');
+	const redirectUri = resolveRedirectUri(url, headers);
 	const { authorization_endpoint } = await getDiscovery();
 
 	const state = newRandom(32);
@@ -658,7 +694,7 @@ export async function finishLogin(event: RequestEvent): Promise<Session | null> 
 		throw error(401, 'Invalid state');
 	}
 
-	const redirectUri = requireEnv('ENTRA_REDIRECT_URI');
+	const redirectUri = resolveRedirectUri(event.url, event.request.headers);
 	const tokens = await exchangeCodeForTokens({
 		code,
 		codeVerifier: authState.codeVerifier,

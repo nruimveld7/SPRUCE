@@ -8,15 +8,28 @@ node_modules
 /.svelte-kit
 /build
 
+# Test output
+coverage
+.nyc_output
+playwright-report
+test-results
+
 # OS
 .DS_Store
 Thumbs.db
+
+# Editor/IDE
+.vscode
+.idea
+*.swp
+*.swo
 
 # Env
 .env
 .env.*
 !.env.example
 !.env.test
+.envrc
 
 # Vite
 vite.config.js.timestamp-*
@@ -24,6 +37,16 @@ vite.config.ts.timestamp-*
 
 # Yarn local state
 .yarn/install-state.gz
+.yarn/cache
+.yarn/unplugged
+.pnp.*
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 
 # Local cert/private key material
 certs/**/*
@@ -31,8 +54,9 @@ certs/**/*
 *.key
 *.pfx
 
-# Temporary local-only mail relay test files (contains hardcoded infra/recipients)
-src/lib/server/mail/notifications.ts
-src/lib/server/mail/templates.ts
-src/routes/mail/+page.server.ts
-src/routes/mail/+page.svelte
+# Temporary local-only mail relay test area (contains hardcoded infra/recipients)
+src/lib/server/mail/
+src/routes/mail/
+
+# Never commit certificate files
+*.crt
