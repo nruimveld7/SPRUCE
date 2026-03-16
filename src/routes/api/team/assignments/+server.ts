@@ -1,9 +1,10 @@
 import { error, json } from '@sveltejs/kit';
-import type { Cookies, RequestHandler } from '@sveltejs/kit';
+import type { Cookies, RequestEvent, RequestHandler } from '@sveltejs/kit';
 import { GetPool } from '$lib/server/db';
-import { getActiveScheduleId } from '$lib/server/auth';
+import { getActiveScheduleId, getSessionAccessToken } from '$lib/server/auth';
 import sql from 'mssql';
 import { sendShiftChangeNotification } from '$lib/server/mail/notifications';
+import { requireScheduleRole } from '$lib/server/schedule-access';
 
 type ScheduleRole = 'Member' | 'Maintainer' | 'Manager';
 
@@ -254,32 +255,13 @@ async function getActorContext(localsUserOid: string, cookies: Cookies) {
 	}
 
 	const pool = await GetPool();
-	const accessResult = await pool
-		.request()
-		.input('scheduleId', scheduleId)
-		.input('userOid', localsUserOid)
-		.query(
-			`SELECT TOP (1) r.RoleName
-			 FROM dbo.ScheduleUsers su
-			 INNER JOIN dbo.Roles r
-			   ON r.RoleId = su.RoleId
-			 WHERE su.ScheduleId = @scheduleId
-			   AND su.UserOid = @userOid
-			   AND su.IsActive = 1
-			   AND su.DeletedAt IS NULL
-			 ORDER BY
-			   CASE r.RoleName
-				 WHEN 'Manager' THEN 3
-				 WHEN 'Maintainer' THEN 2
-				 WHEN 'Member' THEN 1
-				 ELSE 0
-			   END DESC;`
-		);
-
-	const role = accessResult.recordset?.[0]?.RoleName as ScheduleRole | undefined;
-	if (role !== 'Manager' && role !== 'Maintainer') {
-		throw error(403, 'Insufficient permissions');
-	}
+	await requireScheduleRole({
+		userOid: localsUserOid,
+		scheduleId,
+		minRole: 'Maintainer',
+		pool,
+		errorMessage: 'Insufficient permissions'
+	});
 
 	return { pool, scheduleId, actorOid: localsUserOid };
 }
@@ -1189,11 +1171,13 @@ export const GET: RequestHandler = async ({ locals, cookies, url }) => {
 };
 
 async function upsertAssignment({
+	event,
 	locals,
 	cookies,
 	request,
 	enforceConcurrency
 }: {
+	event: RequestEvent;
 	locals: { user?: { id: string } | null };
 	cookies: Cookies;
 	request: Request;
@@ -1590,30 +1574,32 @@ async function upsertAssignment({
 
 		await tx.commit();
 
-		if (shouldNotify) {
-			const emailContext = await getShiftEmailContext({
-				pool,
-				scheduleId,
-				targetUserOid: userOid,
-				actorUserOid: actorOid
-			});
-			if (emailContext) {
-				try {
-					await sendShiftChangeNotification({
-						scheduleName: emailContext.scheduleName,
-						themeJson: emailContext.scheduleThemeJson,
-						intendedRecipients: emailContext.targetEmail ? [emailContext.targetEmail] : [],
-						targetMemberName: emailContext.targetDisplayName,
-						date: startDate,
-						previousShift,
-						newShift,
-						triggeringUserName: emailContext.actorDisplayName
-					});
-				} catch (notificationError) {
-					console.error('Shift change notification failed:', notificationError);
+			if (shouldNotify) {
+				const emailContext = await getShiftEmailContext({
+					pool,
+					scheduleId,
+					targetUserOid: userOid,
+					actorUserOid: actorOid
+				});
+				if (emailContext) {
+					try {
+						const delegatedAccessToken = await getSessionAccessToken(event);
+						await sendShiftChangeNotification({
+							scheduleName: emailContext.scheduleName,
+							themeJson: emailContext.scheduleThemeJson,
+							intendedRecipients: emailContext.targetEmail ? [emailContext.targetEmail] : [],
+							targetMemberName: emailContext.targetDisplayName,
+							date: startDate,
+							previousShift,
+							newShift,
+							triggeringUserName: emailContext.actorDisplayName,
+							delegatedAccessToken
+						});
+					} catch (notificationError) {
+						console.error('Shift change notification failed:', notificationError);
+					}
 				}
 			}
-		}
 	} catch (e) {
 		try {
 			await tx.rollback();
@@ -1626,11 +1612,23 @@ async function upsertAssignment({
 	return json({ success: true });
 }
 
-export const POST: RequestHandler = async ({ locals, cookies, request }) =>
-	upsertAssignment({ locals, cookies, request, enforceConcurrency: false });
+export const POST: RequestHandler = async (event) =>
+	upsertAssignment({
+		event,
+		locals: event.locals,
+		cookies: event.cookies,
+		request: event.request,
+		enforceConcurrency: false
+	});
 
-export const PATCH: RequestHandler = async ({ locals, cookies, request }) =>
-	upsertAssignment({ locals, cookies, request, enforceConcurrency: true });
+export const PATCH: RequestHandler = async (event) =>
+	upsertAssignment({
+		event,
+		locals: event.locals,
+		cookies: event.cookies,
+		request: event.request,
+		enforceConcurrency: true
+	});
 
 type RemoveAssignmentPayload = {
 	userOid?: unknown;
@@ -1640,7 +1638,8 @@ type RemoveAssignmentPayload = {
 	expectedChangeVersionStamp?: unknown;
 };
 
-export const DELETE: RequestHandler = async ({ locals, cookies, request }) => {
+export const DELETE: RequestHandler = async (event) => {
+	const { locals, cookies, request } = event;
 	const currentUser = locals.user;
 	if (!currentUser) {
 		throw error(401, 'Unauthorized');
@@ -1669,6 +1668,14 @@ export const DELETE: RequestHandler = async ({ locals, cookies, request }) => {
 	const tx = new sql.Transaction(pool);
 	await tx.begin();
 	try {
+		const serverDateResult = await new sql.Request(tx).query(
+			`SELECT CONVERT(date, SYSUTCDATETIME()) AS Today;`
+		);
+		const today = toDateOnly(serverDateResult.recordset?.[0]?.Today) ?? '';
+		if (!today) {
+			throw error(500, 'Could not resolve current server date');
+		}
+
 		const affectedShiftAnchors = new Map<number, string>();
 		const markAffectedShift = (shiftId: number, dateOnly: string | null) => {
 			if (!Number.isInteger(shiftId) || shiftId <= 0 || !dateOnly) return;
@@ -1722,8 +1729,18 @@ export const DELETE: RequestHandler = async ({ locals, cookies, request }) => {
 				.input('userOid', userOid)
 				.input('changeStartDate', changeStartDate)
 				.query(
-					`SELECT TOP (1) ShiftId, StartDate, CreatedAt AS ModifiedAt
-					 FROM dbo.ScheduleAssignments
+					`SELECT TOP (1)
+						sut.ShiftId,
+						sut.StartDate,
+						sut.EndDate,
+						sut.CreatedAt AS ModifiedAt,
+						COALESCE(NULLIF(et.Name, ''), 'Unknown shift') AS ShiftName
+					 FROM dbo.ScheduleAssignments sut
+					 LEFT JOIN dbo.Shifts et
+					    ON et.ScheduleId = sut.ScheduleId
+					   AND et.ShiftId = sut.ShiftId
+					   AND et.IsActive = 1
+					   AND et.DeletedAt IS NULL
 					 WHERE ScheduleId = @scheduleId
 					   AND UserOid = @userOid
 					   AND StartDate = @changeStartDate
@@ -1731,7 +1748,13 @@ export const DELETE: RequestHandler = async ({ locals, cookies, request }) => {
 					   AND DeletedAt IS NULL;`
 				);
 			const row = rowResult.recordset?.[0] as
-				| { ShiftId?: number; StartDate?: Date | string; ModifiedAt?: Date | string | null }
+				| {
+						ShiftId?: number;
+						StartDate?: Date | string;
+						EndDate?: Date | string | null;
+						ModifiedAt?: Date | string | null;
+						ShiftName?: string | null;
+				  }
 				| undefined;
 			const currentShiftId = Number(row?.ShiftId ?? 0);
 			if (!currentShiftId) {
@@ -1745,6 +1768,12 @@ export const DELETE: RequestHandler = async ({ locals, cookies, request }) => {
 				throw error(409, 'This assignment change has changed. Refresh and try again.');
 			}
 			markAffectedShift(currentShiftId, changeStartDate);
+			const shouldNotify = assignmentAffectsCurrentOrFuture({
+				startDate: changeStartDate,
+				endDate: toDateOnly(row?.EndDate ?? null),
+				today
+			});
+			const previousShift = String(row?.ShiftName ?? 'Unknown shift');
 
 			await new sql.Request(tx)
 				.input('scheduleId', scheduleId)
@@ -1772,16 +1801,78 @@ export const DELETE: RequestHandler = async ({ locals, cookies, request }) => {
 			}
 
 			await tx.commit();
+
+			if (shouldNotify) {
+				const newShift = await getEffectiveShiftNameForDate(
+					new sql.Request(pool),
+					scheduleId,
+					userOid,
+					changeStartDate
+				);
+				const emailContext = await getShiftEmailContext({
+					pool,
+					scheduleId,
+					targetUserOid: userOid,
+					actorUserOid: actorOid
+				});
+				if (emailContext) {
+					try {
+						const delegatedAccessToken = await getSessionAccessToken(event);
+						await sendShiftChangeNotification({
+							scheduleName: emailContext.scheduleName,
+							themeJson: emailContext.scheduleThemeJson,
+							intendedRecipients: emailContext.targetEmail ? [emailContext.targetEmail] : [],
+							targetMemberName: emailContext.targetDisplayName,
+							date: changeStartDate,
+							previousShift,
+							newShift,
+							triggeringUserName: emailContext.actorDisplayName,
+							delegatedAccessToken
+						});
+					} catch (notificationError) {
+						console.error('Shift change notification failed:', notificationError);
+					}
+				}
+			}
+
 			return json({ success: true, removalMode: 'history_removed' });
 		}
-
-		const serverDateResult = await new sql.Request(tx).query(
-			`SELECT CONVERT(date, SYSUTCDATETIME()) AS Today;`
-		);
-		const today = toDateOnly(serverDateResult.recordset?.[0]?.Today) ?? '';
-		if (!today) {
-			throw error(500, 'Could not resolve current server date');
-		}
+		const impactedAssignmentResult = await new sql.Request(tx)
+			.input('scheduleId', scheduleId)
+			.input('userOid', userOid)
+			.input('today', today)
+			.query(
+				`SELECT TOP (1)
+					sut.StartDate,
+					COALESCE(NULLIF(et.Name, ''), 'Unknown shift') AS ShiftName
+				 FROM dbo.ScheduleAssignments sut
+				 LEFT JOIN dbo.Shifts et
+				    ON et.ScheduleId = sut.ScheduleId
+				   AND et.ShiftId = sut.ShiftId
+				   AND et.IsActive = 1
+				   AND et.DeletedAt IS NULL
+				 WHERE sut.ScheduleId = @scheduleId
+				   AND sut.UserOid = @userOid
+				   AND sut.IsActive = 1
+				   AND sut.DeletedAt IS NULL
+				   AND (sut.EndDate IS NULL OR sut.EndDate >= @today)
+				 ORDER BY
+					CASE
+						WHEN sut.StartDate <= @today AND (sut.EndDate IS NULL OR sut.EndDate >= @today)
+							THEN 0
+						ELSE 1
+					END ASC,
+					CASE WHEN sut.StartDate <= @today THEN sut.StartDate END DESC,
+					CASE WHEN sut.StartDate > @today THEN sut.StartDate END ASC;`
+			);
+		const impactedAssignmentRow = impactedAssignmentResult.recordset?.[0] as
+			| { StartDate?: Date | string; ShiftName?: string | null }
+			| undefined;
+		const impactedStartDate = toDateOnly(impactedAssignmentRow?.StartDate ?? null);
+		const notifyDate =
+			impactedStartDate && impactedStartDate > today ? impactedStartDate : today;
+		const shouldNotify = Boolean(impactedAssignmentRow && notifyDate);
+		const previousShift = String(impactedAssignmentRow?.ShiftName ?? 'Unknown shift');
 
 		await new sql.Request(tx)
 			.input('scheduleId', scheduleId)
@@ -1827,6 +1918,40 @@ export const DELETE: RequestHandler = async ({ locals, cookies, request }) => {
 		}
 
 		await tx.commit();
+
+		if (shouldNotify && notifyDate) {
+			const newShift = await getEffectiveShiftNameForDate(
+				new sql.Request(pool),
+				scheduleId,
+				userOid,
+				notifyDate
+			);
+			const emailContext = await getShiftEmailContext({
+				pool,
+				scheduleId,
+				targetUserOid: userOid,
+				actorUserOid: actorOid
+			});
+			if (emailContext) {
+				try {
+					const delegatedAccessToken = await getSessionAccessToken(event);
+					await sendShiftChangeNotification({
+						scheduleName: emailContext.scheduleName,
+						themeJson: emailContext.scheduleThemeJson,
+						intendedRecipients: emailContext.targetEmail ? [emailContext.targetEmail] : [],
+						targetMemberName: emailContext.targetDisplayName,
+						date: notifyDate,
+						previousShift,
+						newShift,
+						triggeringUserName: emailContext.actorDisplayName,
+						delegatedAccessToken
+					});
+				} catch (notificationError) {
+					console.error('Shift change notification failed:', notificationError);
+				}
+			}
+		}
+
 		return json({ success: true, removalMode: 'timeline_removed' });
 	} catch (e) {
 		try {

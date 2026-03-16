@@ -13,6 +13,7 @@
 	import type { Employee, Group, ScheduleEvent, Status } from '$lib/types/schedule';
 	import { fetchWithAuthRedirect } from '$lib/utils/fetchWithAuthRedirect';
 	import { resolveCellEventVisuals } from '$lib/utils/scheduleEvents';
+	import { longPress } from '$lib/actions/longPress';
 
 	type EventScopeType = 'global' | 'shift' | 'user';
 	type PopupMode = 'list' | 'add' | 'edit';
@@ -85,6 +86,7 @@
 	export let popupResetToken = 0;
 
 	let gridEl: HTMLDivElement | null = null;
+	let gridShellEl: HTMLDivElement | null = null;
 	let bandEl: HTMLDivElement | null = null;
 	let selectedBandEl: HTMLDivElement | null = null;
 	let scopedSelectedBandEl: HTMLDivElement | null = null;
@@ -143,6 +145,7 @@
 	let memberEventsDragStartY = 0;
 	let memberEventsDragStartThumbTopPx = 0;
 	let teamColumnCollapsed = false;
+	let teamColumnGlyphTopPx = 22;
 
 	let scopedEventEntries: ScopedEventEntry[] = [];
 	let memberEventsLoading = false;
@@ -182,6 +185,10 @@
 	let hoverTooltipLoading = false;
 	let hoverTooltipScope: HoverCellScope | null = null;
 	let hoverTooltipEl: HTMLDivElement | null = null;
+	let hoverTooltipScrollEl: HTMLDivElement | null = null;
+	let showHoverTooltipScrollbar = false;
+	let hoverTooltipThumbHeightPx = 0;
+	let hoverTooltipThumbTopPx = 0;
 	let hoverTooltipFetchToken = 0;
 	let canUseHoverTooltips = true;
 	let memberEventsPopupPollTimer: ReturnType<typeof setInterval> | null = null;
@@ -206,7 +213,7 @@
 	const FIXED_COLUMNS_WIDTH_PX = 420;
 	const COLLAPSED_FIXED_COLUMNS_WIDTH_PX = 14;
 	const GRID_MIN_WIDTH_FLOOR_PX = 1100;
-	const LOG_GRID_SIZING_DIAGNOSTICS = true;
+	const LOG_GRID_SIZING_DIAGNOSTICS = false;
 
 	$: days = monthDays;
 	$: dim = monthDays.length;
@@ -226,6 +233,7 @@
 		: FIXED_COLUMNS_WIDTH_PX;
 	$: minimumGridWidthFromContent = effectiveFixedColumnsWidthPx + dim * DAY_COLUMN_MIN_WIDTH_PX;
 	$: gridShellStyle = `--shift-col-width:${shiftColumnWidthCss}; --team-col-width:${teamColumnWidthCss}; --team-toggle-col-width:${teamToggleColumnWidthCss}; --day-col-min-width:${dayColumnMinWidthCss};`;
+	$: teamColumnGlyphStyle = `top:${Math.round(teamColumnGlyphTopPx)}px;`;
 	$: gridTemplateRows = (() => {
 		const tracks: string[] = ['var(--schedule-header-row-height)'];
 		for (const group of groups) {
@@ -636,6 +644,9 @@
 		hoverTooltipLoading = false;
 		hoverTooltipScope = null;
 		hoverTooltipWindowMode = 'day';
+		showHoverTooltipScrollbar = false;
+		hoverTooltipThumbHeightPx = 0;
+		hoverTooltipThumbTopPx = 0;
 	}
 
 	async function showHoverEventsTooltip(
@@ -1163,8 +1174,8 @@
 		void openMemberEventsPopup(day, 'shift', group.category, group.employeeTypeId ?? null, null);
 	}
 
-	function handleShiftCellContextMenu(event: MouseEvent, group: Group) {
-		event.preventDefault();
+	function handleShiftCellContextMenu(event: MouseEvent | undefined, group: Group) {
+		event?.preventDefault();
 		void openShiftMonthEventsPopup(group);
 	}
 
@@ -1658,6 +1669,70 @@
 		return Math.min(max, Math.max(min, value));
 	}
 
+	function normalizeWheelDeltaY(event: WheelEvent, referenceEl: HTMLElement): number {
+		const deltaYPx =
+			event.deltaMode === 1
+				? event.deltaY * 16
+				: event.deltaMode === 2
+					? event.deltaY * 40
+					: event.deltaY;
+		const maxStepPx = 72;
+		return clamp(deltaYPx, -maxStepPx, maxStepPx);
+	}
+
+	function canTooltipConsumeWheelDelta(tooltipEl: HTMLElement, deltaYPx: number): boolean {
+		if (Math.abs(deltaYPx) < 0.5) return false;
+		const maxScrollTop = Math.max(tooltipEl.scrollHeight - tooltipEl.clientHeight, 0);
+		if (maxScrollTop <= 0) return false;
+		if (deltaYPx > 0) return tooltipEl.scrollTop < maxScrollTop - 0.5;
+		return tooltipEl.scrollTop > 0.5;
+	}
+
+	function handleHoverTooltipWheel(event: WheelEvent) {
+		if (!hoverTooltipOpen || !hoverTooltipScrollEl || memberEventsPopupOpen) return;
+		const deltaYPx = normalizeWheelDeltaY(event, hoverTooltipScrollEl);
+		if (!canTooltipConsumeWheelDelta(hoverTooltipScrollEl, deltaYPx)) return;
+		const maxScrollTop = Math.max(
+			hoverTooltipScrollEl.scrollHeight - hoverTooltipScrollEl.clientHeight,
+			0
+		);
+		hoverTooltipScrollEl.scrollTop = clamp(hoverTooltipScrollEl.scrollTop + deltaYPx, 0, maxScrollTop);
+		event.preventDefault();
+		event.stopPropagation();
+	}
+
+	function updateHoverTooltipScrollbar() {
+		if (!hoverTooltipOpen || !hoverTooltipScrollEl) return;
+		const scrollHeight = hoverTooltipScrollEl.scrollHeight;
+		const clientHeight = hoverTooltipScrollEl.clientHeight;
+		const scrollTop = hoverTooltipScrollEl.scrollTop;
+		const hasOverflow = scrollHeight > clientHeight + 1;
+		showHoverTooltipScrollbar = hasOverflow;
+		if (!hasOverflow) {
+			hoverTooltipThumbHeightPx = 0;
+			hoverTooltipThumbTopPx = 0;
+			return;
+		}
+		const railInsetPx = 8;
+		const railHeight = Math.max(clientHeight - railInsetPx * 2, 0);
+		if (railHeight <= 0) {
+			hoverTooltipThumbHeightPx = 0;
+			hoverTooltipThumbTopPx = 0;
+			return;
+		}
+		const minThumbHeight = 30;
+		const nextThumbHeight = Math.max(minThumbHeight, (railHeight * clientHeight) / scrollHeight);
+		const maxThumbTop = Math.max(railHeight - nextThumbHeight, 0);
+		const maxScrollTop = Math.max(scrollHeight - clientHeight, 1);
+		const nextThumbTop = (scrollTop / maxScrollTop) * maxThumbTop;
+		hoverTooltipThumbHeightPx = nextThumbHeight;
+		hoverTooltipThumbTopPx = clamp(nextThumbTop, 0, maxThumbTop);
+	}
+
+	function onHoverTooltipScroll() {
+		updateHoverTooltipScrollbar();
+	}
+
 	function updateMemberEventsModalScrollbar() {
 		if (!memberEventsModalScrollEl || !memberEventsPopupOpen) return;
 
@@ -1909,6 +1984,31 @@
 			clamp(rect.bottom - verticalBottomInset, visibleTop, visibleBottom)
 		);
 		const verticalHeight = Math.max(verticalBottom - verticalTop, 0);
+
+		if (gridShellEl) {
+			const teamColumnRailToggleEl = gridWrapEl.querySelector<HTMLElement>('.teamColumnRailToggle');
+			const shellRect = gridShellEl.getBoundingClientRect();
+			if (teamColumnRailToggleEl) {
+				const railRect = teamColumnRailToggleEl.getBoundingClientRect();
+				const visibleRailTop = Math.max(railRect.top, rect.top, 0);
+				const visibleRailBottom = Math.min(railRect.bottom, rect.bottom, viewportHeight);
+				const fallbackVisibleTop = Math.max(rect.top, 0);
+				const fallbackVisibleBottom = Math.min(rect.bottom, viewportHeight);
+				const centerViewportY =
+					visibleRailBottom > visibleRailTop
+						? (visibleRailTop + visibleRailBottom) / 2
+						: fallbackVisibleBottom > fallbackVisibleTop
+							? (fallbackVisibleTop + fallbackVisibleBottom) / 2
+							: rect.top + headerRowHeight / 2;
+				teamColumnGlyphTopPx = clamp(
+					centerViewportY - shellRect.top,
+					0,
+					Math.max(shellRect.height, 0)
+				);
+			} else {
+				teamColumnGlyphTopPx = headerRowHeight / 2;
+			}
+		}
 
 		horizontalRailStyle = `left:${horizontalLeft}px;top:${horizontalTop}px;width:${horizontalWidth}px;`;
 		verticalRailStyle = `left:${verticalLeft}px;top:${verticalTop}px;height:${verticalHeight}px;`;
@@ -2198,9 +2298,11 @@
 		};
 		window.addEventListener('resize', onResize);
 		window.addEventListener('scroll', onViewportScroll, true);
+		window.addEventListener('wheel', handleHoverTooltipWheel, { passive: false, capture: true });
 		return () => {
 			window.removeEventListener('resize', onResize);
 			window.removeEventListener('scroll', onViewportScroll, true);
+			window.removeEventListener('wheel', handleHoverTooltipWheel, true);
 			if (gridResizeObserver) {
 				gridResizeObserver.disconnect();
 				gridResizeObserver = null;
@@ -2222,6 +2324,9 @@
 		updateRowDensity();
 		syncGridResizeObserverTargets();
 		queueScrollbarUpdate(true);
+		if (hoverTooltipOpen) {
+			updateHoverTooltipScrollbar();
+		}
 		if (memberEventsPopupOpen) {
 			updateMemberEventsModalScrollbar();
 		}
@@ -2288,9 +2393,10 @@
 	class="gridwrapShell shiftMergeLayout"
 	class:mobileTeamColumnCollapsed={teamColumnCollapsed}
 	style={gridShellStyle}
+	bind:this={gridShellEl}
 >
 	{#if showTeamColumnRailToggle}
-		<div class="teamColumnRailViewportGlyph" aria-hidden="true">
+		<div class="teamColumnRailViewportGlyph" style={teamColumnGlyphStyle} aria-hidden="true">
 			<svg viewBox="0 0 24 24" aria-hidden="true">
 				{#if teamColumnCollapsed}
 					<path d="M9 5L16 12L9 19" />
@@ -2376,6 +2482,7 @@
 						event.preventDefault();
 						handleDayHeaderDoubleClick(day);
 					}}
+					use:longPress={{ onLongPress: () => handleDayHeaderDoubleClick(day) }}
 					on:touchend={(event) => handleDayHeaderTouchEnd(day, event)}
 					on:mouseenter={(event) =>
 						handleDayHeaderHover(day, { clientX: event.clientX, clientY: event.clientY })}
@@ -2456,6 +2563,7 @@
 						style={`grid-row: span ${group.employees.length};`}
 						on:click={() => onToggleGroup(group)}
 						on:contextmenu={(event) => handleShiftCellContextMenu(event, group)}
+						use:longPress={{ onLongPress: () => handleShiftCellContextMenu(undefined, group) }}
 						on:mouseenter={(event) =>
 							void showShiftMonthHoverTooltip(group, {
 								clientX: event.clientX,
@@ -2527,37 +2635,53 @@
 			style={`left:${hoverTooltipLeftPx}px;top:${hoverTooltipTopPx}px;`}
 			bind:this={hoverTooltipEl}
 		>
-			<div class="memberEventsHoverTooltipTitle">{hoverTooltipTitle}</div>
-			{#if hoverTooltipLoading}
-				<div class="memberEventEmptyRow">Loading events...</div>
-			{:else}
-				<div class="memberEventsRows">
-					{#if scopedHoverEvents.length === 0}
-						<div class="memberEventEmptyRow">No Events</div>
-					{:else}
-						{#each scopedHoverEvents as eventRow (eventRow.eventId)}
-							{@const scopeSuffix = eventScopeSuffix(eventRow, hoverTooltipScopeType)}
-							<div class="memberEventRow">
-								<div class="memberEventCodeLine">
-									<span
-										class={`memberEventColorDot ${eventDisplayModeClass(eventRow.eventDisplayMode)}`}
-										style={`background:${eventRow.eventCodeColor};`}
-										aria-hidden="true"
-									></span>
-									<strong>{eventRow.eventCodeCode}</strong>
-									<span>{eventRow.eventCodeName}{scopeSuffix ? ` - ${scopeSuffix}` : ''}</span>
-								</div>
-								{#if hoverTooltipWindowMode === 'shift-month' || eventRow.startDate !== eventRow.endDate}
-									<div class="memberEventDates">
-										{formatEventDateOrRange(eventRow.startDate, eventRow.endDate)}
+			<div
+				class="memberEventsHoverTooltipScroll"
+				class:hasScrollbar={showHoverTooltipScrollbar}
+				bind:this={hoverTooltipScrollEl}
+				on:scroll={onHoverTooltipScroll}
+			>
+				<div class="memberEventsHoverTooltipTitle">{hoverTooltipTitle}</div>
+				{#if hoverTooltipLoading}
+					<div class="memberEventEmptyRow">Loading events...</div>
+				{:else}
+					<div class="memberEventsRows">
+						{#if scopedHoverEvents.length === 0}
+							<div class="memberEventEmptyRow">No Events</div>
+						{:else}
+							{#each scopedHoverEvents as eventRow (eventRow.eventId)}
+								{@const scopeSuffix = eventScopeSuffix(eventRow, hoverTooltipScopeType)}
+								<div class="memberEventRow">
+									<div class="memberEventCodeLine">
+										<span
+											class={`memberEventColorDot ${eventDisplayModeClass(eventRow.eventDisplayMode)}`}
+											style={`background:${eventRow.eventCodeColor};`}
+											aria-hidden="true"
+										></span>
+										<strong>{eventRow.eventCodeCode}</strong>
+										<span>{eventRow.eventCodeName}{scopeSuffix ? ` - ${scopeSuffix}` : ''}</span>
 									</div>
-								{/if}
-								{#if eventRow.comments}
-									<div class="memberEventComment">{eventRow.comments}</div>
-								{/if}
-							</div>
-						{/each}
-					{/if}
+									{#if hoverTooltipWindowMode === 'shift-month' || eventRow.startDate !== eventRow.endDate}
+										<div class="memberEventDates">
+											{formatEventDateOrRange(eventRow.startDate, eventRow.endDate)}
+										</div>
+									{/if}
+									{#if eventRow.comments}
+										<div class="memberEventComment">{eventRow.comments}</div>
+									{/if}
+								</div>
+							{/each}
+						{/if}
+					</div>
+				{/if}
+			</div>
+			{#if showHoverTooltipScrollbar}
+				<div class="memberEventsHoverTooltipRail" role="presentation" aria-hidden="true">
+					<div
+						class="memberEventsHoverTooltipThumb"
+						role="presentation"
+						style={`height:${hoverTooltipThumbHeightPx}px;transform:translateY(${hoverTooltipThumbTopPx}px);`}
+					></div>
 				</div>
 			{/if}
 		</div>
@@ -2692,6 +2816,9 @@
 										onOpenChange={setAddStartDatePickerOpen}
 										on:change={(event) => {
 											addEventStartDate = event.detail;
+											if (addEventEndDate && addEventEndDate < addEventStartDate) {
+												addEventEndDate = addEventStartDate;
+											}
 										}}
 									/>
 								</div>

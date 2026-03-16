@@ -1736,11 +1736,11 @@ body.teamShiftRowDragging {
 
 :root[data-theme='light'] .managerThemeDefaultBtn:disabled,
 :root[data-theme='light'] .managerThemeDefaultBtn[disabled] {
-  opacity: 0.45;
+  opacity: 0.78;
   cursor: not-allowed;
   background: rgba(128, 132, 142, 0.18);
   border-color: rgba(128, 132, 142, 0.45);
-  color: rgba(205, 210, 220, 0.62);
+  color: rgba(66, 72, 84, 0.92);
   box-shadow: none;
 }
 
@@ -1748,7 +1748,7 @@ body.teamShiftRowDragging {
 :root[data-theme='light'] .managerThemeDefaultBtn[disabled]:hover {
   background: rgba(128, 132, 142, 0.18);
   border-color: rgba(128, 132, 142, 0.45);
-  color: rgba(205, 210, 220, 0.62);
+  color: rgba(66, 72, 84, 0.92);
   box-shadow: none;
 }
 
@@ -1768,11 +1768,11 @@ body.teamShiftRowDragging {
 
 :root[data-theme='light'] .managerThemeRevertBtn:disabled,
 :root[data-theme='light'] .managerThemeRevertBtn[disabled] {
-  opacity: 0.45;
+  opacity: 0.78;
   cursor: not-allowed;
   background: rgba(128, 132, 142, 0.18);
   border-color: rgba(128, 132, 142, 0.45);
-  color: rgba(205, 210, 220, 0.62);
+  color: rgba(66, 72, 84, 0.92);
   box-shadow: none;
 }
 
@@ -1780,7 +1780,7 @@ body.teamShiftRowDragging {
 :root[data-theme='light'] .managerThemeRevertBtn[disabled]:hover {
   background: rgba(128, 132, 142, 0.18);
   border-color: rgba(128, 132, 142, 0.45);
-  color: rgba(205, 210, 220, 0.62);
+  color: rgba(66, 72, 84, 0.92);
   box-shadow: none;
 }
 
@@ -1918,11 +1918,11 @@ body.teamShiftRowDragging {
 
 :root[data-theme='light'] .managerSaveBtn:disabled,
 :root[data-theme='light'] .managerSaveBtn[disabled] {
-  opacity: 0.45;
+  opacity: 0.78;
   cursor: not-allowed;
   background: rgba(128, 132, 142, 0.18);
   border-color: rgba(128, 132, 142, 0.45);
-  color: rgba(205, 210, 220, 0.62);
+  color: rgba(66, 72, 84, 0.92);
   box-shadow: none;
   filter: none;
 }
@@ -1940,7 +1940,7 @@ body.teamShiftRowDragging {
 :root[data-theme='light'] .managerSaveBtn[disabled]:hover {
   background: rgba(128, 132, 142, 0.18);
   border-color: rgba(128, 132, 142, 0.45);
-  color: rgba(205, 210, 220, 0.62);
+  color: rgba(66, 72, 84, 0.92);
   box-shadow: none;
   filter: none;
 }
@@ -2234,5 +2234,26 @@ body.team-modal-open {
   .assignmentTableShiftLabel {
     width: 100%;
     text-align: left;
+  }
+
+  .managerThemeSectionSwitch {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .managerThemeQuickActions {
+    margin-left: 0;
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .managerThemeTableWrap {
+    overflow: visible;
+  }
+
+  .managerThemeTable {
+    min-width: 640px;
   }
 }

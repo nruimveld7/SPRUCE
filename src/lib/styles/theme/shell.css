@@ -172,7 +172,7 @@
   grid-template-columns: var(--month-calendar-column-template);
   width: max-content;
   min-width: 100%;
-  grid-template-rows: repeat(var(--month-calendar-week-count), minmax(var(--month-calendar-cell-min-height), 1fr));
+  grid-template-rows: repeat(var(--month-calendar-week-count), minmax(min-content, 1fr));
   height: 100%;
   gap: 6px;
   align-content: stretch;
@@ -187,7 +187,7 @@
   border: 1px solid var(--table-border-color);
   border-radius: 12px;
   background: var(--calendar-weekday-bg, var(--table-weekday-bg));
-  min-height: 0;
+  min-height: var(--month-calendar-cell-min-height);
   min-width: 0;
   height: 100%;
   padding: 6px;
@@ -216,11 +216,16 @@
   margin-top: 6px;
   display: flex;
   flex-wrap: wrap;
+  width: 0;
+  min-width: 100%;
   gap: var(--month-calendar-indicator-gap);
+  align-content: flex-start;
+  justify-content: flex-start;
   align-items: center;
 }
 
 .monthCalendarIndicator {
+  flex: 0 0 var(--month-calendar-indicator-size);
   width: var(--month-calendar-indicator-size);
   height: var(--month-calendar-indicator-size);
   border-radius: 999px;
@@ -252,13 +257,49 @@
   z-index: 520;
   width: min(460px, calc(100vw - 24px));
   max-height: min(50vh, 420px);
-  overflow: auto;
+  overflow: hidden;
   border-radius: 14px;
   border: 1px solid var(--border-accent-medium);
   background: linear-gradient(180deg, var(--gradient-popover-start), var(--gradient-popover-end) 100%);
   box-shadow: var(--shadow);
+  padding: 0;
+  pointer-events: auto;
+}
+
+.monthCalendarHoverTooltipScroll {
+  max-height: inherit;
+  overflow: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   padding: 12px;
-  pointer-events: none;
+}
+
+.monthCalendarHoverTooltipScroll.hasScrollbar {
+  padding-right: calc(12px + var(--scrollbar-size) + 4px);
+}
+
+.monthCalendarHoverTooltipScroll::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.monthCalendarHoverTooltipRail {
+  position: absolute;
+  top: 8px;
+  right: 5px;
+  bottom: 8px;
+  width: var(--scrollbar-size);
+  z-index: 2;
+  border-radius: var(--scrollbar-radius);
+  background: var(--scrollbar-track-bg);
+}
+
+.monthCalendarHoverTooltipThumb {
+  width: 100%;
+  z-index: 3;
+  border-radius: var(--scrollbar-radius);
+  background: var(--scrollbar-thumb-bg);
+  border: var(--scrollbar-thumb-border);
 }
 
 .monthCalendarHoverTooltipTitle {

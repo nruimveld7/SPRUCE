@@ -3,6 +3,7 @@ import type { RequestHandler } from './$types';
 import { GetPool } from '$lib/server/db';
 import { DEFAULT_SCHEDULE_THEME } from '$lib/server/schedule-theme';
 import sql from 'mssql';
+import { requireScheduleRole } from '$lib/server/schedule-access';
 
 type ThemeFieldKey =
 	| 'background'
@@ -123,25 +124,13 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	const themeJson = JSON.stringify(theme);
 
 	const pool = await GetPool();
-	const managerAccessResult = await pool
-		.request()
-		.input('userOid', user.id)
-		.input('scheduleId', scheduleId)
-		.query(
-			`SELECT TOP (1) 1 AS HasManagerAccess
-			 FROM dbo.ScheduleUsers su
-			 INNER JOIN dbo.Roles r
-				ON r.RoleId = su.RoleId
-			 WHERE su.UserOid = @userOid
-			   AND su.ScheduleId = @scheduleId
-			   AND su.IsActive = 1
-			   AND su.DeletedAt IS NULL
-			   AND r.RoleName = 'Manager';`
-		);
-
-	if (!managerAccessResult.recordset?.[0]?.HasManagerAccess) {
-		throw error(403, 'Only schedule managers can update schedule customization');
-	}
+	await requireScheduleRole({
+		userOid: user.id,
+		scheduleId,
+		minRole: 'Manager',
+		pool,
+		errorMessage: 'Only schedule managers can update schedule customization'
+	});
 
 	const updateResult = await pool
 		.request()

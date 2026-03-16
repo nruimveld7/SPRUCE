@@ -3,6 +3,7 @@ import type { Cookies, RequestHandler } from '@sveltejs/kit';
 import { GetPool } from '$lib/server/db';
 import { getActiveScheduleId } from '$lib/server/auth';
 import sql from 'mssql';
+import { requireScheduleRole } from '$lib/server/schedule-access';
 
 type ScheduleRole = 'Member' | 'Maintainer' | 'Manager';
 
@@ -78,32 +79,13 @@ async function getActorContext(localsUserOid: string, cookies: Cookies) {
 	}
 
 	const pool = await GetPool();
-	const accessResult = await pool
-		.request()
-		.input('scheduleId', scheduleId)
-		.input('userOid', localsUserOid)
-		.query(
-			`SELECT TOP (1) r.RoleName
-			 FROM dbo.ScheduleUsers su
-			 INNER JOIN dbo.Roles r
-			   ON r.RoleId = su.RoleId
-			 WHERE su.ScheduleId = @scheduleId
-			   AND su.UserOid = @userOid
-			   AND su.IsActive = 1
-			   AND su.DeletedAt IS NULL
-			 ORDER BY
-			   CASE r.RoleName
-				 WHEN 'Manager' THEN 3
-				 WHEN 'Maintainer' THEN 2
-				 WHEN 'Member' THEN 1
-				 ELSE 0
-			   END DESC;`
-		);
-
-	const role = accessResult.recordset?.[0]?.RoleName as ScheduleRole | undefined;
-	if (role !== 'Manager' && role !== 'Maintainer') {
-		throw error(403, 'Insufficient permissions');
-	}
+	await requireScheduleRole({
+		userOid: localsUserOid,
+		scheduleId,
+		minRole: 'Maintainer',
+		pool,
+		errorMessage: 'Insufficient permissions'
+	});
 
 	return { pool, scheduleId };
 }

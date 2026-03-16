@@ -89,8 +89,9 @@ Schema notes:
 Used by app and DB connection logic:
 
 - SQL: `MSSQL_HOST`, `MSSQL_PORT`, `MSSQL_USER`, `MSSQL_PASSWORD`, `MSSQL_DATABASE`, `MSSQL_ENCRYPT`, `MSSQL_TRUST_SERVER_CERT`
-- Entra/Auth: `ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID`, `ENTRA_REDIRECT_URI`, `ENTRA_REDIRECT_URI_FORCE` (optional), `ENTRA_CLIENT_CERT_PRIVATE_KEY_PATH`, `ENTRA_CLIENT_CERT_PUBLIC_CERT_PATH`
-- App: `APP_SESSION_SECRET`, `BOOTSTRAP_MANAGER_OIDS`
+- Entra/Auth: `ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID`, `ENTRA_REDIRECT_URI`, `ENTRA_REDIRECT_URI_FORCE` (optional)
+- Entra cert path overrides (optional): `ENTRA_CLIENT_CERT_PRIVATE_KEY_PATH`, `ENTRA_CLIENT_CERT_PUBLIC_CERT_PATH` (defaults: `/app/certs/entra-client.key`, `/app/certs/entra-client.crt`)
+- App: `BOOTSTRAP_MANAGER_OIDS`
 - Optional (dev API guard): `DEV_CONSOLE_ALLOWED_OIDS`
 
 `BOOTSTRAP_MANAGER_OIDS` accepts comma, semicolon, or whitespace delimiters.

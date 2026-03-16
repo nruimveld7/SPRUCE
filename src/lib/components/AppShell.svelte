@@ -17,6 +17,7 @@
 	import type { Employee, Group, ScheduleEvent, Status } from '$lib/types/schedule';
 	import { fetchWithAuthRedirect } from '$lib/utils/fetchWithAuthRedirect';
 	import { buildMonthDays, dowShort, monthNames } from '$lib/utils/date';
+	import { longPress } from '$lib/actions/longPress';
 
 	type Theme = 'light' | 'dark';
 	type ThemePreference = 'system' | 'dark' | 'light';
@@ -316,6 +317,12 @@
 	let calendarHoverTooltipLeftPx = 0;
 	let calendarHoverTooltipTopPx = 0;
 	let calendarHoverTooltipEl: HTMLDivElement | null = null;
+	let calendarHoverTooltipScrollEl: HTMLDivElement | null = null;
+	let showCalendarHoverTooltipScrollbar = false;
+	let calendarHoverTooltipThumbHeightPx = 0;
+	let calendarHoverTooltipThumbTopPx = 0;
+	let calendarHoverTooltipPinnedByTap = false;
+	let suppressNextCalendarCellTap = false;
 	let calendarHoverFetchToken = 0;
 	let calendarHoverHideTimer: ReturnType<typeof setTimeout> | null = null;
 	let canUseHoverTooltips = true;
@@ -784,6 +791,81 @@
 		return Math.min(max, Math.max(min, value));
 	}
 
+	function normalizeWheelDeltaY(event: WheelEvent, referenceEl: HTMLElement): number {
+		const deltaYPx =
+			event.deltaMode === 1
+				? event.deltaY * 16
+				: event.deltaMode === 2
+					? event.deltaY * 40
+					: event.deltaY;
+		const maxStepPx = 72;
+		return clamp(deltaYPx, -maxStepPx, maxStepPx);
+	}
+
+	function canTooltipConsumeWheelDelta(tooltipEl: HTMLElement, deltaYPx: number): boolean {
+		if (Math.abs(deltaYPx) < 0.5) return false;
+		const maxScrollTop = Math.max(tooltipEl.scrollHeight - tooltipEl.clientHeight, 0);
+		if (maxScrollTop <= 0) return false;
+		if (deltaYPx > 0) return tooltipEl.scrollTop < maxScrollTop - 0.5;
+		return tooltipEl.scrollTop > 0.5;
+	}
+
+	function handleCalendarHoverTooltipWheel(event: WheelEvent) {
+		if (
+			!calendarHoverTooltipOpen ||
+			!calendarHoverTooltipScrollEl ||
+			calendarPopupOpen ||
+			showScheduleGridView
+		) {
+			return;
+		}
+		const deltaYPx = normalizeWheelDeltaY(event, calendarHoverTooltipScrollEl);
+		if (!canTooltipConsumeWheelDelta(calendarHoverTooltipScrollEl, deltaYPx)) return;
+		const maxScrollTop = Math.max(
+			calendarHoverTooltipScrollEl.scrollHeight - calendarHoverTooltipScrollEl.clientHeight,
+			0
+		);
+		calendarHoverTooltipScrollEl.scrollTop = clamp(
+			calendarHoverTooltipScrollEl.scrollTop + deltaYPx,
+			0,
+			maxScrollTop
+		);
+		event.preventDefault();
+		event.stopPropagation();
+	}
+
+	function updateCalendarHoverTooltipScrollbar() {
+		if (!calendarHoverTooltipOpen || !calendarHoverTooltipScrollEl) return;
+		const scrollHeight = calendarHoverTooltipScrollEl.scrollHeight;
+		const clientHeight = calendarHoverTooltipScrollEl.clientHeight;
+		const scrollTop = calendarHoverTooltipScrollEl.scrollTop;
+		const hasOverflow = scrollHeight > clientHeight + 1;
+		showCalendarHoverTooltipScrollbar = hasOverflow;
+		if (!hasOverflow) {
+			calendarHoverTooltipThumbHeightPx = 0;
+			calendarHoverTooltipThumbTopPx = 0;
+			return;
+		}
+		const railInsetPx = 8;
+		const railHeight = Math.max(clientHeight - railInsetPx * 2, 0);
+		if (railHeight <= 0) {
+			calendarHoverTooltipThumbHeightPx = 0;
+			calendarHoverTooltipThumbTopPx = 0;
+			return;
+		}
+		const minThumbHeight = 30;
+		const nextThumbHeight = Math.max(minThumbHeight, (railHeight * clientHeight) / scrollHeight);
+		const maxThumbTop = Math.max(railHeight - nextThumbHeight, 0);
+		const maxScrollTop = Math.max(scrollHeight - clientHeight, 1);
+		const nextThumbTop = (scrollTop / maxScrollTop) * maxThumbTop;
+		calendarHoverTooltipThumbHeightPx = nextThumbHeight;
+		calendarHoverTooltipThumbTopPx = clamp(nextThumbTop, 0, maxThumbTop);
+	}
+
+	function onCalendarHoverTooltipScroll() {
+		updateCalendarHoverTooltipScrollbar();
+	}
+
 	function setGlobalScrollbarDragging(active: boolean) {
 		if (typeof document === 'undefined') return;
 		const body = document.body;
@@ -1091,24 +1173,16 @@
 	$: calendarScheduledReminderSummaryLines = (() => {
 		if (!calendarAddReminderScheduled) return [] as string[];
 		const lines: string[] = [];
-		const seen = new Set<string>();
+		const seenReminderKeys = new Set<string>();
 		for (const reminderDraft of calendarScheduledReminderDrafts) {
-			const key = `${reminderDraft.amount}|${reminderDraft.unit}|${reminderDraft.hour}|${reminderDraft.meridiem}`;
-			if (seen.has(key)) continue;
-			seen.add(key);
-			const unitLabel =
-				reminderDraft.unit === 'days'
-					? reminderDraft.amount === 1
-						? 'day'
-						: 'days'
-					: reminderDraft.unit === 'weeks'
-						? reminderDraft.amount === 1
-							? 'week'
-							: 'weeks'
-						: reminderDraft.amount === 1
-							? 'month'
-							: 'months';
-			lines.push(`${reminderDraft.amount} ${unitLabel} before at ${reminderDraft.hour}:00 ${reminderDraft.meridiem}`);
+			const key = reminderKey(reminderDraft);
+			if (seenReminderKeys.has(key)) continue;
+			seenReminderKeys.add(key);
+			const targetDate = reminderTargetDate(calendarAddEventStartDate, reminderDraft);
+			if (!targetDate) continue;
+			lines.push(
+				`${reminderDraft.hour} ${reminderDraft.meridiem} on ${formatReminderPreviewDate(targetDate)}`
+			);
 		}
 		return lines;
 	})();
@@ -1287,6 +1361,38 @@
 		return `${year}-${month}-${dayText}`;
 	}
 
+	function reminderKey(reminderDraft: ScheduledReminderDraft): string {
+		return `${reminderDraft.amount}|${reminderDraft.unit}|${reminderDraft.hour}|${reminderDraft.meridiem}`;
+	}
+
+	function reminderTargetDate(
+		startDateIso: string,
+		reminderDraft: ScheduledReminderDraft
+	): Date | null {
+		if (!isIsoDate(startDateIso)) return null;
+		const [yearRaw, monthRaw, dayRaw] = startDateIso.split('-');
+		const year = Number(yearRaw);
+		const month = Number(monthRaw);
+		const day = Number(dayRaw);
+		const target = new Date(year, month - 1, day, 12, 0, 0, 0);
+		if (reminderDraft.unit === 'months') {
+			target.setMonth(target.getMonth() - reminderDraft.amount);
+			return target;
+		}
+		const dayOffset =
+			reminderDraft.unit === 'weeks' ? reminderDraft.amount * 7 : reminderDraft.amount;
+		target.setDate(target.getDate() - dayOffset);
+		return target;
+	}
+
+	function formatReminderPreviewDate(date: Date): string {
+		return new Intl.DateTimeFormat('en-US', {
+			month: 'short',
+			day: 'numeric',
+			year: 'numeric'
+		}).format(date);
+	}
+
 	function dateIntersectsDay(startDate: string, endDate: string, dayIso: string): boolean {
 		return startDate <= dayIso && endDate >= dayIso;
 	}
@@ -1425,6 +1531,10 @@
 		calendarHoverTooltipEntries = [];
 		calendarHoverTooltipTitle = '';
 		calendarHoverTooltipData = null;
+		showCalendarHoverTooltipScrollbar = false;
+		calendarHoverTooltipThumbHeightPx = 0;
+		calendarHoverTooltipThumbTopPx = 0;
+		calendarHoverTooltipPinnedByTap = false;
 	}
 
 	function cancelCalendarHoverHide() {
@@ -1435,15 +1545,21 @@
 	}
 
 	function scheduleCalendarHoverHide() {
+		if (calendarHoverTooltipPinnedByTap) return;
 		cancelCalendarHoverHide();
 		calendarHoverHideTimer = setTimeout(() => {
 			hideCalendarHoverTooltip();
 		}, 140);
 	}
 
-	async function showCalendarHoverTooltip(day: number, pointer: { clientX: number; clientY: number }) {
-		if (!canUseHoverTooltips || calendarPopupOpen || showScheduleGridView) return;
+	async function showCalendarHoverTooltip(
+		day: number,
+		pointer: { clientX: number; clientY: number },
+		options: { force?: boolean; pinnedByTap?: boolean } = {}
+	) {
+		if ((!canUseHoverTooltips && !options.force) || calendarPopupOpen || showScheduleGridView) return;
 		cancelCalendarHoverHide();
+		calendarHoverTooltipPinnedByTap = options.pinnedByTap === true;
 		const dayIso = toIsoDate(selectedYear, selectedMonthIndex, day);
 		calendarHoverTooltipTitle = popupDateTitle(dayIso);
 		calendarHoverTooltipOpen = true;
@@ -1461,6 +1577,46 @@
 			if (fetchToken !== calendarHoverFetchToken) return;
 			hideCalendarHoverTooltip();
 		}
+	}
+
+	function handleCalendarCellTap(day: number, event: MouseEvent) {
+		if (canUseHoverTooltips) return;
+		if (suppressNextCalendarCellTap) {
+			suppressNextCalendarCellTap = false;
+			return;
+		}
+		if (monthDayIndicators(day).length === 0) {
+			hideCalendarHoverTooltip();
+			return;
+		}
+		const cellEl = event.currentTarget as HTMLElement | null;
+		const rect = cellEl?.getBoundingClientRect();
+		const hasEventPoint = Number.isFinite(event.clientX) && Number.isFinite(event.clientY);
+		const clientX = hasEventPoint
+			? event.clientX
+			: rect
+				? rect.left + rect.width / 2
+				: 0;
+		const clientY = hasEventPoint
+			? event.clientY
+			: rect
+				? rect.top + rect.height / 2
+				: 0;
+		void showCalendarHoverTooltip(day, { clientX, clientY }, { force: true, pinnedByTap: true });
+	}
+
+	function handlePointerDownForPinnedCalendarTooltip(event: PointerEvent) {
+		if (!calendarHoverTooltipPinnedByTap || !calendarHoverTooltipOpen) return;
+		const target = event.target as Node | null;
+		if (!target) return;
+		const tooltipContainsTarget = calendarHoverTooltipEl?.contains(target) ?? false;
+		if (tooltipContainsTarget) return;
+		const tappedCellEl =
+			target instanceof Element ? target.closest('.monthCalendarCell') : null;
+		if (tappedCellEl) {
+			suppressNextCalendarCellTap = true;
+		}
+		hideCalendarHoverTooltip();
 	}
 
 	function calendarPopupEvents(): CalendarScopedEventEntry[] {
@@ -2882,12 +3038,17 @@
 		};
 		document.addEventListener('visibilitychange', handleVisibilityOrFocus);
 		window.addEventListener('focus', handleVisibilityOrFocus);
+		window.addEventListener('pointerdown', handlePointerDownForPinnedCalendarTooltip, true);
 		requestAnimationFrame(updateAppScrollbar);
 		const onResize = () => {
 			updateAppScrollbar();
 			updateCalendarScrollbars();
 		};
 		window.addEventListener('resize', onResize);
+		window.addEventListener('wheel', handleCalendarHoverTooltipWheel, {
+			passive: false,
+			capture: true
+		});
 		return () => {
 			if (scheduleContextPollTimer) {
 				clearInterval(scheduleContextPollTimer);
@@ -2895,7 +3056,9 @@
 			}
 			document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
 			window.removeEventListener('focus', handleVisibilityOrFocus);
+			window.removeEventListener('pointerdown', handlePointerDownForPinnedCalendarTooltip, true);
 			window.removeEventListener('resize', onResize);
+			window.removeEventListener('wheel', handleCalendarHoverTooltipWheel, true);
 			if (themeMediaQuery) {
 				if (typeof themeMediaQuery.removeEventListener === 'function') {
 					themeMediaQuery.removeEventListener('change', handleSystemThemeChange);
@@ -2918,6 +3081,9 @@
 			requestAnimationFrame(() => {
 				updateAppScrollbar();
 				updateCalendarScrollbars();
+				if (calendarHoverTooltipOpen) {
+					updateCalendarHoverTooltipScrollbar();
+				}
 				updateCalendarPopupModalScrollbar();
 				if (calendarPopupScopeOptionsOpen) {
 					updateCalendarPopupScopeOptionsScrollbar();
@@ -3090,10 +3256,12 @@
 												if (!calendarHoverTooltipOpen) return;
 												positionCalendarHoverTooltip(event.clientX, event.clientY);
 											}}
+											on:click={(event) => handleCalendarCellTap(day.day, event)}
 											on:mouseleave={scheduleCalendarHoverHide}
 											on:contextmenu|preventDefault={() => {
 												void openCalendarDayPopup(day.day);
 											}}
+											use:longPress={{ onLongPress: () => void openCalendarDayPopup(day.day) }}
 											>
 												<div class="monthCalendarCellDay">{day.day}</div>
 												<div class="monthCalendarIndicators" aria-hidden="true">
@@ -3193,36 +3361,52 @@
 				on:mouseenter={cancelCalendarHoverHide}
 				on:mouseleave={scheduleCalendarHoverHide}
 			>
-				<div class="monthCalendarHoverTooltipTitle">{calendarHoverTooltipTitle}</div>
-				{#if calendarHoverTooltipLoading}
-					<div class="monthCalendarEventEmptyRow">Loading events...</div>
-				{:else}
-					<div class="monthCalendarEventRows">
-						{#if calendarHoverTooltipEntries.length === 0}
-							<div class="monthCalendarEventEmptyRow">No Events</div>
-						{:else}
-								{#each calendarHoverTooltipEntries as eventRow (eventRow.eventId)}
-									<div class="monthCalendarEventRow">
-										<div class="monthCalendarEventCodeLine">
-											<span
-												class={`monthCalendarEventColorDot ${indicatorDisplayModeClass(eventRow.eventDisplayMode)}`}
-												style={`background:${eventRow.eventCodeColor};`}
-												aria-hidden="true"
-											></span>
-										<strong>{eventRow.eventCodeCode}</strong>
-										<span>{eventRow.eventCodeName} - {eventScopeSuffix(eventRow, calendarHoverTooltipData)}</span>
-									</div>
-									{#if eventRow.startDate !== eventRow.endDate}
-										<div class="monthCalendarEventDates">
-											{formatEventDateOrRange(eventRow.startDate, eventRow.endDate)}
+				<div
+					class="monthCalendarHoverTooltipScroll"
+					class:hasScrollbar={showCalendarHoverTooltipScrollbar}
+					bind:this={calendarHoverTooltipScrollEl}
+					on:scroll={onCalendarHoverTooltipScroll}
+				>
+					<div class="monthCalendarHoverTooltipTitle">{calendarHoverTooltipTitle}</div>
+					{#if calendarHoverTooltipLoading}
+						<div class="monthCalendarEventEmptyRow">Loading events...</div>
+					{:else}
+						<div class="monthCalendarEventRows">
+							{#if calendarHoverTooltipEntries.length === 0}
+								<div class="monthCalendarEventEmptyRow">No Events</div>
+							{:else}
+									{#each calendarHoverTooltipEntries as eventRow (eventRow.eventId)}
+										<div class="monthCalendarEventRow">
+											<div class="monthCalendarEventCodeLine">
+												<span
+													class={`monthCalendarEventColorDot ${indicatorDisplayModeClass(eventRow.eventDisplayMode)}`}
+													style={`background:${eventRow.eventCodeColor};`}
+													aria-hidden="true"
+												></span>
+											<strong>{eventRow.eventCodeCode}</strong>
+											<span>{eventRow.eventCodeName} - {eventScopeSuffix(eventRow, calendarHoverTooltipData)}</span>
 										</div>
-									{/if}
-									{#if eventRow.comments}
-										<div class="monthCalendarEventComment">{eventRow.comments}</div>
-									{/if}
-								</div>
-							{/each}
-						{/if}
+										{#if eventRow.startDate !== eventRow.endDate}
+											<div class="monthCalendarEventDates">
+												{formatEventDateOrRange(eventRow.startDate, eventRow.endDate)}
+											</div>
+										{/if}
+										{#if eventRow.comments}
+											<div class="monthCalendarEventComment">{eventRow.comments}</div>
+										{/if}
+									</div>
+								{/each}
+							{/if}
+						</div>
+					{/if}
+				</div>
+				{#if showCalendarHoverTooltipScrollbar}
+					<div class="monthCalendarHoverTooltipRail" role="presentation" aria-hidden="true">
+						<div
+							class="monthCalendarHoverTooltipThumb"
+							role="presentation"
+							style={`height:${calendarHoverTooltipThumbHeightPx}px;transform:translateY(${calendarHoverTooltipThumbTopPx}px);`}
+						></div>
 					</div>
 				{/if}
 			</div>
@@ -3471,7 +3655,15 @@
 											value={calendarAddEventStartDate}
 											open={calendarAddStartDatePickerOpen}
 											onOpenChange={setCalendarAddStartDatePickerOpen}
-											on:change={(event) => (calendarAddEventStartDate = event.detail)}
+											on:change={(event) => {
+												calendarAddEventStartDate = event.detail;
+												if (
+													calendarAddEventEndDate &&
+													calendarAddEventEndDate < calendarAddEventStartDate
+												) {
+													calendarAddEventEndDate = calendarAddEventStartDate;
+												}
+											}}
 										/>
 									</div>
 									<div class="memberEventField">

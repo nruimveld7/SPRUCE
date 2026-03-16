@@ -2,6 +2,7 @@ import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { GetPool } from '$lib/server/db';
 import { getActiveScheduleId } from '$lib/server/auth';
+import { listEffectiveScheduleMemberships } from '$lib/server/schedule-access';
 
 type ScheduleRole = 'Member' | 'Maintainer' | 'Manager';
 type ScheduleMembership = {
@@ -35,49 +36,11 @@ export const GET: RequestHandler = async ({ locals, cookies }) => {
 
 	const defaultScheduleId = (defaultResult.recordset?.[0]?.DefaultScheduleId as number | null) ?? null;
 
-	const result = await pool
-		.request()
-		.input('userOid', user.id)
-		.input('defaultScheduleId', defaultScheduleId)
-		.query(
-			`WITH RankedMemberships AS (
-				SELECT
-					su.ScheduleId,
-					s.Name,
-					r.RoleName,
-					s.IsActive,
-					s.ThemeJson,
-					COALESCE(s.UpdatedAt, s.CreatedAt) AS VersionAt,
-					CAST(CASE WHEN su.ScheduleId = @defaultScheduleId THEN 1 ELSE 0 END AS bit) AS IsDefault,
-					ROW_NUMBER() OVER (
-						PARTITION BY su.ScheduleId
-						ORDER BY
-							CASE r.RoleName
-								WHEN 'Manager' THEN 3
-								WHEN 'Maintainer' THEN 2
-								WHEN 'Member' THEN 1
-								ELSE 0
-							END DESC,
-							su.GrantedAt DESC
-					) AS RoleRank
-				FROM dbo.ScheduleUsers su
-				INNER JOIN dbo.Schedules s
-					ON s.ScheduleId = su.ScheduleId
-				INNER JOIN dbo.Roles r
-					ON r.RoleId = su.RoleId
-				WHERE su.UserOid = @userOid
-				  AND su.DeletedAt IS NULL
-				  AND su.IsActive = 1
-				  AND s.DeletedAt IS NULL
-				  AND (s.IsActive = 1 OR r.RoleName = 'Manager')
-			)
-			SELECT ScheduleId, Name, RoleName, IsDefault, IsActive, ThemeJson, VersionAt
-			FROM RankedMemberships
-			WHERE RoleRank = 1
-			ORDER BY IsDefault DESC, Name;`
-		);
-
-	const memberships = (result.recordset ?? []) as ScheduleMembership[];
+	const memberships = (await listEffectiveScheduleMemberships({
+		userOid: user.id,
+		defaultScheduleId,
+		pool
+	})) as ScheduleMembership[];
 	const resolvedActiveScheduleId =
 		activeScheduleId !== null &&
 		memberships.some((membership) => membership.ScheduleId === activeScheduleId)

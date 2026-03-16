@@ -3,6 +3,7 @@
   import { indicatorFor } from '$lib/utils/status';
   import type { Employee, ScheduleEvent, Status } from '$lib/types/schedule';
   import { hasHoverEventsForCell, resolveCellEventVisuals } from '$lib/utils/scheduleEvents';
+  import { longPress } from '$lib/actions/longPress';
 
   export let employee: Employee;
   export let groupName = '';
@@ -120,6 +121,7 @@
     event.preventDefault();
     handleRowDoubleClick();
   }}
+  use:longPress={{ onLongPress: handleRowDoubleClick }}
   on:mouseenter={(event) => onHoverNameCell({ clientX: event.clientX, clientY: event.clientY })}
   on:mousemove={(event) => onHoverNameCell({ clientX: event.clientX, clientY: event.clientY })}
   on:mouseleave={onLeaveNameCell}
@@ -151,6 +153,7 @@
       event.preventDefault();
       onDoubleClickDayCell(employee, cell.day);
     }}
+    use:longPress={{ onLongPress: () => onDoubleClickDayCell(employee, cell.day) }}
     on:touchend={(event) => handleDayCellTouchEnd(cell.day, event)}
     on:mouseenter={(event) => {
       if (!cell.hasHoverEvents) return;

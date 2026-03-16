@@ -2,6 +2,7 @@ import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { GetPool } from '$lib/server/db';
 import { getActiveScheduleId } from '$lib/server/auth';
+import { requireScheduleRole } from '$lib/server/schedule-access';
 
 type ScheduleRole = 'Member' | 'Maintainer' | 'Manager';
 type EventScopeType = 'global' | 'shift' | 'user';
@@ -17,13 +18,6 @@ type ScheduleAssignmentsCapabilities = {
 	hasShiftId: boolean;
 	hasEmployeeTypeId: boolean;
 };
-
-function roleRank(role: ScheduleRole | null): number {
-	if (role === 'Manager') return 3;
-	if (role === 'Maintainer') return 2;
-	if (role === 'Member') return 1;
-	return 0;
-}
 
 function cleanDateOnly(value: string | null, label: string): string {
 	if (!value) throw error(400, `${label} is required`);
@@ -94,32 +88,13 @@ export const GET: RequestHandler = async ({ locals, cookies, url }) => {
 	}
 
 	const pool = await GetPool();
-	const accessResult = await pool
-		.request()
-		.input('scheduleId', scheduleId)
-		.input('userOid', currentUser.id)
-		.query(
-			`SELECT TOP (1) r.RoleName
-			 FROM dbo.ScheduleUsers su
-			 INNER JOIN dbo.Roles r
-			   ON r.RoleId = su.RoleId
-			 WHERE su.ScheduleId = @scheduleId
-			   AND su.UserOid = @userOid
-			   AND su.IsActive = 1
-			   AND su.DeletedAt IS NULL
-			 ORDER BY
-			   CASE r.RoleName
-				 WHEN 'Manager' THEN 3
-				 WHEN 'Maintainer' THEN 2
-				 WHEN 'Member' THEN 1
-				 ELSE 0
-			   END DESC;`
-		);
-
-	const role = (accessResult.recordset?.[0]?.RoleName as ScheduleRole | undefined) ?? null;
-	if (roleRank(role) < roleRank('Member')) {
-		throw error(403, 'Insufficient permissions');
-	}
+	await requireScheduleRole({
+		userOid: currentUser.id,
+		scheduleId,
+		minRole: 'Member',
+		pool,
+		errorMessage: 'Insufficient permissions'
+	});
 
 	const capabilities = await getScheduleEventsCapabilities(pool);
 	const assignmentsCapabilities = await getScheduleAssignmentsCapabilities(pool);

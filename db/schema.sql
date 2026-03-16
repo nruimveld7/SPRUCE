@@ -49,16 +49,6 @@ BEGIN
     ADD EntraLastName nvarchar(100) NULL;
 END;
 
-IF COL_LENGTH('dbo.Users', 'OnboardingRole') IS NOT NULL
-BEGIN
-    EXEC(N'
-        UPDATE dbo.Users
-           SET OnboardingRole = 0
-         WHERE OnboardingRole IS NULL
-            OR OnboardingRole NOT BETWEEN 0 AND 3;
-    ');
-END;
-
 IF OBJECT_ID('dbo.DF_Users_OnboardingRole', 'D') IS NULL
 BEGIN
     ALTER TABLE dbo.Users
@@ -81,16 +71,6 @@ BEGIN
     EXEC(N'
         ALTER TABLE dbo.Users
         ADD CONSTRAINT CK_Users_OnboardingRole_Valid CHECK (OnboardingRole BETWEEN 0 AND 3);
-    ');
-END;
-
-IF COL_LENGTH('dbo.Users', 'ScheduleUiStateJson') IS NOT NULL
-BEGIN
-    EXEC(N'
-        UPDATE dbo.Users
-           SET ScheduleUiStateJson = NULL
-         WHERE ScheduleUiStateJson IS NOT NULL
-           AND ISJSON(ScheduleUiStateJson) <> 1;
     ');
 END;
 
@@ -204,71 +184,6 @@ BEGIN
     ) FOR ThemeJson;
 END;
 
-IF COL_LENGTH('dbo.Schedules', 'ThemeJson') IS NOT NULL
-BEGIN
-    EXEC(N'
-        UPDATE dbo.Schedules
-        SET ThemeJson = N''{"dark":{"background":"#07080b","text":"#ffffff","accent":"#c8102e","todayColor":"#c8102e","weekendColor":"#000000","weekdayColor":"#161a22","pageBorderColor":"#292a30","scheduleBorderColor":"#292a30","primaryGradient1":"#7a1b2c","primaryGradient2":"#2d1118","secondaryGradient1":"#361219","secondaryGradient2":"#0c0e12"},"light":{"background":"#f2f3f5","text":"#000000","accent":"#c8102e","todayColor":"#c8102e","weekendColor":"#d4d7de","weekdayColor":"#f5f6f8","pageBorderColor":"#bbbec6","scheduleBorderColor":"#bbbec6","primaryGradient1":"#f4d7dd","primaryGradient2":"#f8f9fb","secondaryGradient1":"#faeef0","secondaryGradient2":"#f5f6f8"}}''
-        WHERE ThemeJson IS NULL
-           OR ISJSON(ThemeJson) <> 1
-           OR JSON_VALUE(ThemeJson, ''$.dark.background'') IS NULL
-           OR JSON_VALUE(ThemeJson, ''$.dark.text'') IS NULL
-           OR JSON_VALUE(ThemeJson, ''$.dark.accent'') IS NULL
-           OR JSON_VALUE(ThemeJson, ''$.dark.primaryGradient1'') IS NULL
-           OR JSON_VALUE(ThemeJson, ''$.dark.primaryGradient2'') IS NULL
-           OR JSON_VALUE(ThemeJson, ''$.dark.secondaryGradient1'') IS NULL
-           OR JSON_VALUE(ThemeJson, ''$.dark.secondaryGradient2'') IS NULL
-           OR JSON_VALUE(ThemeJson, ''$.light.background'') IS NULL
-           OR JSON_VALUE(ThemeJson, ''$.light.text'') IS NULL
-           OR JSON_VALUE(ThemeJson, ''$.light.accent'') IS NULL
-           OR JSON_VALUE(ThemeJson, ''$.light.primaryGradient1'') IS NULL
-           OR JSON_VALUE(ThemeJson, ''$.light.primaryGradient2'') IS NULL
-           OR JSON_VALUE(ThemeJson, ''$.light.secondaryGradient1'') IS NULL
-           OR JSON_VALUE(ThemeJson, ''$.light.secondaryGradient2'') IS NULL;
-    ');
-
-    UPDATE dbo.Schedules
-       SET ThemeJson =
-            JSON_MODIFY(
-            JSON_MODIFY(
-            JSON_MODIFY(
-            JSON_MODIFY(
-            JSON_MODIFY(
-            JSON_MODIFY(
-            JSON_MODIFY(
-            JSON_MODIFY(
-            JSON_MODIFY(
-            JSON_MODIFY(ThemeJson, '$.dark.todayColor',
-                COALESCE(JSON_VALUE(ThemeJson, '$.dark.todayColor'), JSON_VALUE(ThemeJson, '$.dark.accent'), '#c8102e')),
-                '$.dark.weekendColor', COALESCE(JSON_VALUE(ThemeJson, '$.dark.weekendColor'), '#000000')),
-                '$.dark.weekdayColor', COALESCE(JSON_VALUE(ThemeJson, '$.dark.weekdayColor'), '#161a22')),
-                '$.dark.pageBorderColor',
-                COALESCE(JSON_VALUE(ThemeJson, '$.dark.pageBorderColor'), JSON_VALUE(ThemeJson, '$.dark.borderColor'), '#292a30')),
-                '$.dark.scheduleBorderColor',
-                COALESCE(JSON_VALUE(ThemeJson, '$.dark.scheduleBorderColor'), JSON_VALUE(ThemeJson, '$.dark.borderColor'), '#292a30')),
-                '$.light.todayColor',
-                COALESCE(JSON_VALUE(ThemeJson, '$.light.todayColor'), JSON_VALUE(ThemeJson, '$.light.accent'), '#c8102e')),
-                '$.light.weekendColor', COALESCE(JSON_VALUE(ThemeJson, '$.light.weekendColor'), '#d4d7de')),
-                '$.light.weekdayColor', COALESCE(JSON_VALUE(ThemeJson, '$.light.weekdayColor'), '#f5f6f8')),
-                '$.light.pageBorderColor',
-                COALESCE(JSON_VALUE(ThemeJson, '$.light.pageBorderColor'), JSON_VALUE(ThemeJson, '$.light.borderColor'), '#bbbec6')),
-                '$.light.scheduleBorderColor',
-                COALESCE(JSON_VALUE(ThemeJson, '$.light.scheduleBorderColor'), JSON_VALUE(ThemeJson, '$.light.borderColor'), '#bbbec6'))
-     WHERE ISJSON(ThemeJson) = 1
-       AND (
-            JSON_VALUE(ThemeJson, '$.dark.todayColor') IS NULL
-         OR JSON_VALUE(ThemeJson, '$.dark.weekendColor') IS NULL
-         OR JSON_VALUE(ThemeJson, '$.dark.weekdayColor') IS NULL
-         OR JSON_VALUE(ThemeJson, '$.dark.pageBorderColor') IS NULL
-         OR JSON_VALUE(ThemeJson, '$.dark.scheduleBorderColor') IS NULL
-         OR JSON_VALUE(ThemeJson, '$.light.todayColor') IS NULL
-         OR JSON_VALUE(ThemeJson, '$.light.weekendColor') IS NULL
-         OR JSON_VALUE(ThemeJson, '$.light.weekdayColor') IS NULL
-         OR JSON_VALUE(ThemeJson, '$.light.pageBorderColor') IS NULL
-         OR JSON_VALUE(ThemeJson, '$.light.scheduleBorderColor') IS NULL
-       );
-END;
-
 IF EXISTS (
     SELECT 1
     FROM sys.columns
@@ -280,12 +195,8 @@ BEGIN
     EXEC(N'ALTER TABLE dbo.Schedules ALTER COLUMN ThemeJson nvarchar(max) NOT NULL;');
 END;
 
-IF OBJECT_ID('dbo.CK_Schedules_ThemeJson_Valid', 'C') IS NOT NULL
-BEGIN
-    ALTER TABLE dbo.Schedules DROP CONSTRAINT CK_Schedules_ThemeJson_Valid;
-END;
-
-IF COL_LENGTH('dbo.Schedules', 'ThemeJson') IS NOT NULL
+IF OBJECT_ID('dbo.CK_Schedules_ThemeJson_Valid', 'C') IS NULL
+AND COL_LENGTH('dbo.Schedules', 'ThemeJson') IS NOT NULL
 BEGIN
     EXEC(N'
         ALTER TABLE dbo.Schedules
@@ -363,40 +274,6 @@ BEGIN
     ADD PatternSummary nvarchar(100) NULL;
 END;
 
-IF COL_LENGTH('dbo.Patterns', 'PatternSummary') IS NOT NULL
-BEGIN
-    EXEC(N'
-        UPDATE dbo.Patterns
-           SET PatternSummary = ''0 shifts'';
-
-        ;WITH SummaryCounts AS (
-            SELECT
-                p.PatternId,
-                COUNT(*) AS ActiveShiftCount
-            FROM dbo.Patterns p
-            CROSS APPLY OPENJSON(p.PatternJson, ''$.swatches'')
-                WITH (onDays nvarchar(max) ''$.onDays'' AS JSON) sw
-            WHERE ISJSON(p.PatternJson) = 1
-              AND JSON_QUERY(p.PatternJson, ''$.swatches'') IS NOT NULL
-              AND EXISTS (SELECT 1 FROM OPENJSON(sw.onDays))
-            GROUP BY p.PatternId
-        )
-        UPDATE p
-           SET PatternSummary = CONCAT(
-                COALESCE(sc.ActiveShiftCount, 0),
-                '' '',
-                CASE WHEN COALESCE(sc.ActiveShiftCount, 0) = 1 THEN ''shift'' ELSE ''shifts'' END
-           )
-        FROM dbo.Patterns p
-        LEFT JOIN SummaryCounts sc
-               ON sc.PatternId = p.PatternId;
-
-        UPDATE dbo.Patterns
-           SET PatternSummary = COALESCE(NULLIF(LTRIM(RTRIM(PatternSummary)), ''''), ''0 shifts'')
-         WHERE PatternSummary IS NULL OR LTRIM(RTRIM(PatternSummary)) = '''';
-    ');
-END;
-
 IF EXISTS (
     SELECT 1
     FROM sys.columns
@@ -431,45 +308,6 @@ BEGIN
     );
 END;
 
-IF OBJECT_ID('dbo.EmployeeTypes', 'U') IS NOT NULL
-AND NOT EXISTS (SELECT 1 FROM dbo.Shifts)
-BEGIN
-    SET IDENTITY_INSERT dbo.Shifts ON;
-    INSERT INTO dbo.Shifts (
-        ShiftId,
-        ScheduleId,
-        Name,
-        StartDate,
-        EndDate,
-        DisplayOrder,
-        PatternId,
-        IsActive,
-        CreatedAt,
-        CreatedBy,
-        UpdatedAt,
-        UpdatedBy,
-        DeletedAt,
-        DeletedBy
-    )
-    SELECT
-        EmployeeTypeId,
-        ScheduleId,
-        Name,
-        StartDate,
-        EndDate,
-        DisplayOrder,
-        PatternId,
-        IsActive,
-        CreatedAt,
-        CreatedBy,
-        UpdatedAt,
-        UpdatedBy,
-        DeletedAt,
-        DeletedBy
-    FROM dbo.EmployeeTypes;
-    SET IDENTITY_INSERT dbo.Shifts OFF;
-END;
-
 IF COL_LENGTH('dbo.Shifts', 'StartDate') IS NULL
 BEGIN
     ALTER TABLE dbo.Shifts
@@ -489,15 +327,6 @@ BEGIN
     DEFAULT CAST(SYSUTCDATETIME() AS date) FOR StartDate;
 END;
 
-IF COL_LENGTH('dbo.Shifts', 'StartDate') IS NOT NULL
-BEGIN
-    EXEC(N'
-        UPDATE dbo.Shifts
-           SET StartDate = CAST(CreatedAt AS date)
-         WHERE StartDate IS NULL;
-    ');
-END;
-
 IF EXISTS (
     SELECT 1
     FROM sys.columns
@@ -515,26 +344,6 @@ BEGIN
     ADD CONSTRAINT CK_Shifts_DateRange CHECK (EndDate IS NULL OR EndDate >= StartDate);
 END;
 
-EXEC(N'
-    WITH Ordered AS (
-        SELECT
-            ShiftId,
-            ROW_NUMBER() OVER (
-                PARTITION BY ScheduleId
-                ORDER BY DisplayOrder ASC, Name ASC, ShiftId ASC
-            ) AS NextDisplayOrder
-        FROM dbo.Shifts
-        WHERE IsActive = 1
-          AND DeletedAt IS NULL
-    )
-    UPDATE et
-       SET DisplayOrder = o.NextDisplayOrder
-    FROM dbo.Shifts et
-    INNER JOIN Ordered o
-      ON o.ShiftId = et.ShiftId
-    WHERE et.DisplayOrder <> o.NextDisplayOrder;
-');
-
 IF OBJECT_ID('dbo.CK_Shifts_DisplayOrder_Positive', 'C') IS NULL
 BEGIN
     ALTER TABLE dbo.Shifts
@@ -551,93 +360,6 @@ BEGIN
     ON dbo.Shifts (ScheduleId, DisplayOrder, ShiftId)
     WHERE IsActive = 1 AND DeletedAt IS NULL;
 END;
-
--- Pattern JSON contract:
--- {
---   "swatches": [
---     { "swatchIndex": 0, "color": "#RRGGBB", "onDays": [1, 2, ...] }
---   ],
---   "noneSwatch": { "code": "NONE" }
--- }
-IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Patterns') AND name = 'PatternJson')
-BEGIN
-    DECLARE @InvalidPatterns TABLE (PatternId int NOT NULL PRIMARY KEY);
-
-    INSERT INTO @InvalidPatterns (PatternId)
-    SELECT p.PatternId
-    FROM dbo.Patterns p
-    WHERE
-        ISJSON(p.PatternJson) <> 1
-        OR JSON_QUERY(p.PatternJson, '$.swatches') IS NULL
-        OR JSON_QUERY(p.PatternJson, '$.swatches[4]') IS NOT NULL
-        OR (JSON_QUERY(p.PatternJson, '$.swatches[0]') IS NOT NULL
-            AND (JSON_VALUE(p.PatternJson, '$.swatches[0].color') IS NULL
-                 OR JSON_QUERY(p.PatternJson, '$.swatches[0].onDays') IS NULL))
-        OR (JSON_QUERY(p.PatternJson, '$.swatches[1]') IS NOT NULL
-            AND (JSON_VALUE(p.PatternJson, '$.swatches[1].color') IS NULL
-                 OR JSON_QUERY(p.PatternJson, '$.swatches[1].onDays') IS NULL))
-        OR (JSON_QUERY(p.PatternJson, '$.swatches[2]') IS NOT NULL
-            AND (JSON_VALUE(p.PatternJson, '$.swatches[2].color') IS NULL
-                 OR JSON_QUERY(p.PatternJson, '$.swatches[2].onDays') IS NULL))
-        OR (JSON_QUERY(p.PatternJson, '$.swatches[3]') IS NOT NULL
-            AND (JSON_VALUE(p.PatternJson, '$.swatches[3].color') IS NULL
-                 OR JSON_QUERY(p.PatternJson, '$.swatches[3].onDays') IS NULL))
-        OR (
-            JSON_VALUE(p.PatternJson, '$.noneSwatch.code') IS NOT NULL
-            AND UPPER(JSON_VALUE(p.PatternJson, '$.noneSwatch.code')) <> 'NONE'
-        );
-
-    IF OBJECT_ID('dbo.Shifts', 'U') IS NOT NULL
-    BEGIN
-        UPDATE et
-           SET PatternId = NULL,
-               UpdatedAt = SYSUTCDATETIME(),
-               UpdatedBy = COALESCE(et.UpdatedBy, 'schema')
-        FROM dbo.Shifts et
-        INNER JOIN @InvalidPatterns ip
-                ON ip.PatternId = et.PatternId
-        WHERE et.PatternId IS NOT NULL;
-    END;
-
-    DELETE p
-    FROM dbo.Patterns p
-    INNER JOIN @InvalidPatterns ip
-            ON ip.PatternId = p.PatternId;
-
-    UPDATE dbo.Patterns
-       SET PatternJson = JSON_MODIFY(PatternJson, '$.noneSwatch', JSON_QUERY('{"code":"NONE"}'))
-     WHERE ISJSON(PatternJson) = 1
-       AND JSON_QUERY(PatternJson, '$.swatches') IS NOT NULL
-       AND JSON_VALUE(PatternJson, '$.noneSwatch.code') IS NULL;
-END;
-
-IF OBJECT_ID('dbo.CK_Patterns_PatternJson_Swatches', 'C') IS NOT NULL
-BEGIN
-    ALTER TABLE dbo.Patterns DROP CONSTRAINT CK_Patterns_PatternJson_Swatches;
-END;
-
-ALTER TABLE dbo.Patterns
-ADD CONSTRAINT CK_Patterns_PatternJson_Swatches CHECK (
-    ISJSON(PatternJson) = 1
-    AND JSON_QUERY(PatternJson, '$.swatches') IS NOT NULL
-    AND JSON_QUERY(PatternJson, '$.swatches[4]') IS NULL
-    AND (JSON_QUERY(PatternJson, '$.swatches[0]') IS NULL
-         OR (JSON_VALUE(PatternJson, '$.swatches[0].color') IS NOT NULL
-             AND JSON_QUERY(PatternJson, '$.swatches[0].onDays') IS NOT NULL))
-    AND (JSON_QUERY(PatternJson, '$.swatches[1]') IS NULL
-         OR (JSON_VALUE(PatternJson, '$.swatches[1].color') IS NOT NULL
-             AND JSON_QUERY(PatternJson, '$.swatches[1].onDays') IS NOT NULL))
-    AND (JSON_QUERY(PatternJson, '$.swatches[2]') IS NULL
-         OR (JSON_VALUE(PatternJson, '$.swatches[2].color') IS NOT NULL
-             AND JSON_QUERY(PatternJson, '$.swatches[2].onDays') IS NOT NULL))
-    AND (JSON_QUERY(PatternJson, '$.swatches[3]') IS NULL
-         OR (JSON_VALUE(PatternJson, '$.swatches[3].color') IS NOT NULL
-             AND JSON_QUERY(PatternJson, '$.swatches[3].onDays') IS NOT NULL))
-    AND (
-        JSON_VALUE(PatternJson, '$.noneSwatch.code') IS NULL
-        OR UPPER(JSON_VALUE(PatternJson, '$.noneSwatch.code')) = 'NONE'
-    )
-);
 
 IF OBJECT_ID('dbo.CK_Patterns_Name_NotBlank', 'C') IS NULL
 BEGIN
@@ -657,6 +379,32 @@ IF COL_LENGTH('dbo.Patterns', 'PatternNameNormalized') IS NULL
 BEGIN
     ALTER TABLE dbo.Patterns
     ADD PatternNameNormalized AS UPPER(LTRIM(RTRIM(Name))) PERSISTED;
+END;
+
+IF OBJECT_ID('dbo.CK_Patterns_PatternJson_Swatches', 'C') IS NULL
+BEGIN
+    ALTER TABLE dbo.Patterns
+    ADD CONSTRAINT CK_Patterns_PatternJson_Swatches CHECK (
+        ISJSON(PatternJson) = 1
+        AND JSON_QUERY(PatternJson, '$.swatches') IS NOT NULL
+        AND JSON_QUERY(PatternJson, '$.swatches[4]') IS NULL
+        AND (JSON_QUERY(PatternJson, '$.swatches[0]') IS NULL
+            OR (JSON_VALUE(PatternJson, '$.swatches[0].color') IS NOT NULL
+                AND JSON_QUERY(PatternJson, '$.swatches[0].onDays') IS NOT NULL))
+        AND (JSON_QUERY(PatternJson, '$.swatches[1]') IS NULL
+            OR (JSON_VALUE(PatternJson, '$.swatches[1].color') IS NOT NULL
+                AND JSON_QUERY(PatternJson, '$.swatches[1].onDays') IS NOT NULL))
+        AND (JSON_QUERY(PatternJson, '$.swatches[2]') IS NULL
+            OR (JSON_VALUE(PatternJson, '$.swatches[2].color') IS NOT NULL
+                AND JSON_QUERY(PatternJson, '$.swatches[2].onDays') IS NOT NULL))
+        AND (JSON_QUERY(PatternJson, '$.swatches[3]') IS NULL
+            OR (JSON_VALUE(PatternJson, '$.swatches[3].color') IS NOT NULL
+                AND JSON_QUERY(PatternJson, '$.swatches[3].onDays') IS NOT NULL))
+        AND (
+            JSON_VALUE(PatternJson, '$.noneSwatch.code') IS NULL
+            OR UPPER(JSON_VALUE(PatternJson, '$.noneSwatch.code')) = 'NONE'
+        )
+    );
 END;
 
 IF OBJECT_ID('dbo.ShiftEdits', 'U') IS NULL
@@ -686,63 +434,10 @@ BEGIN
     );
 END;
 
-IF OBJECT_ID('dbo.EmployeeTypeVersions', 'U') IS NOT NULL
-AND NOT EXISTS (SELECT 1 FROM dbo.ShiftEdits)
-BEGIN
-    INSERT INTO dbo.ShiftEdits (
-        ScheduleId,
-        ShiftId,
-        StartDate,
-        EndDate,
-        DisplayOrder,
-        Name,
-        PatternId,
-        IsActive,
-        CreatedAt,
-        CreatedBy,
-        UpdatedAt,
-        UpdatedBy,
-        EndedAt,
-        EndedBy,
-        DeletedAt,
-        DeletedBy
-    )
-    SELECT
-        ScheduleId,
-        EmployeeTypeId,
-        StartDate,
-        EndDate,
-        DisplayOrder,
-        Name,
-        PatternId,
-        IsActive,
-        CreatedAt,
-        CreatedBy,
-        UpdatedAt,
-        UpdatedBy,
-        EndedAt,
-        EndedBy,
-        DeletedAt,
-        DeletedBy
-    FROM dbo.EmployeeTypeVersions;
-END;
-
 IF COL_LENGTH('dbo.ShiftEdits', 'DisplayOrder') IS NULL
 BEGIN
     ALTER TABLE dbo.ShiftEdits
     ADD DisplayOrder int NULL;
-END;
-
-IF COL_LENGTH('dbo.ShiftEdits', 'DisplayOrder') IS NOT NULL
-BEGIN
-    EXEC(N'
-        UPDATE etv
-           SET DisplayOrder = et.DisplayOrder
-          FROM dbo.ShiftEdits etv
-          INNER JOIN dbo.Shifts et
-            ON et.ShiftId = etv.ShiftId
-         WHERE etv.DisplayOrder IS NULL;
-    ');
 END;
 
 IF NOT EXISTS (
@@ -754,70 +449,6 @@ BEGIN
     CREATE INDEX IX_ShiftEdits_Schedule_Start_End
     ON dbo.ShiftEdits (ScheduleId, StartDate, EndDate, ShiftId)
     WHERE IsActive = 1 AND DeletedAt IS NULL;
-END;
-
-IF NOT EXISTS (
-    SELECT 1 FROM dbo.ShiftEdits
-)
-BEGIN
-    IF COL_LENGTH('dbo.ShiftEdits', 'DisplayOrder') IS NOT NULL
-    BEGIN
-        EXEC(N'
-            INSERT INTO dbo.ShiftEdits (
-                ScheduleId,
-                ShiftId,
-                StartDate,
-                EndDate,
-                DisplayOrder,
-                Name,
-                PatternId,
-                CreatedAt,
-                CreatedBy,
-                IsActive
-            )
-            SELECT
-                et.ScheduleId,
-                et.ShiftId,
-                et.StartDate,
-                et.EndDate,
-                et.DisplayOrder,
-                et.Name,
-                et.PatternId,
-                ISNULL(et.CreatedAt, SYSUTCDATETIME()),
-                et.CreatedBy,
-                1
-            FROM dbo.Shifts et
-            WHERE et.DeletedAt IS NULL
-              AND et.IsActive = 1;
-        ');
-    END;
-    ELSE
-    BEGIN
-        INSERT INTO dbo.ShiftEdits (
-            ScheduleId,
-            ShiftId,
-            StartDate,
-            EndDate,
-            Name,
-            PatternId,
-            CreatedAt,
-            CreatedBy,
-            IsActive
-        )
-        SELECT
-            et.ScheduleId,
-            et.ShiftId,
-            et.StartDate,
-            et.EndDate,
-            et.Name,
-            et.PatternId,
-            ISNULL(et.CreatedAt, SYSUTCDATETIME()),
-            et.CreatedBy,
-            1
-        FROM dbo.Shifts et
-        WHERE et.DeletedAt IS NULL
-          AND et.IsActive = 1;
-    END;
 END;
 
 IF OBJECT_ID('dbo.ScheduleShiftOrders', 'U') IS NULL
@@ -838,31 +469,6 @@ BEGIN
         CONSTRAINT CK_ScheduleShiftOrders_MonthStart CHECK (DAY(EffectiveMonth) = 1),
         CONSTRAINT CK_ScheduleShiftOrders_DisplayOrder CHECK (DisplayOrder >= 1)
     );
-END;
-
-IF OBJECT_ID('dbo.ShiftOrderMonthItems', 'U') IS NOT NULL
-AND NOT EXISTS (SELECT 1 FROM dbo.ScheduleShiftOrders)
-BEGIN
-    INSERT INTO dbo.ScheduleShiftOrders (
-        ScheduleId,
-        EffectiveMonth,
-        ShiftId,
-        DisplayOrder,
-        CreatedAt,
-        CreatedBy,
-        UpdatedAt,
-        UpdatedBy
-    )
-    SELECT
-        ScheduleId,
-        EffectiveMonth,
-        EmployeeTypeId,
-        DisplayOrder,
-        CreatedAt,
-        CreatedBy,
-        UpdatedAt,
-        UpdatedBy
-    FROM dbo.ShiftOrderMonthItems;
 END;
 
 IF NOT EXISTS (
@@ -947,55 +553,10 @@ BEGIN
     );
 END;
 
-IF OBJECT_ID('dbo.CoverageCodes', 'U') IS NOT NULL
-AND NOT EXISTS (SELECT 1 FROM dbo.EventCodes)
-BEGIN
-    SET IDENTITY_INSERT dbo.EventCodes ON;
-    INSERT INTO dbo.EventCodes (
-        EventCodeId,
-        ScheduleId,
-        Code,
-        Label,
-        DisplayMode,
-        Color,
-        SortOrder,
-        IsActive,
-        CreatedAt,
-        CreatedBy,
-        DeletedAt,
-        DeletedBy
-    )
-    SELECT
-        CoverageCodeId,
-        ScheduleId,
-        Code,
-        Label,
-        COALESCE(DisplayMode, 'Schedule Overlay'),
-        Color,
-        SortOrder,
-        IsActive,
-        CreatedAt,
-        CreatedBy,
-        DeletedAt,
-        DeletedBy
-    FROM dbo.CoverageCodes;
-    SET IDENTITY_INSERT dbo.EventCodes OFF;
-END;
-
 IF COL_LENGTH('dbo.EventCodes', 'DisplayMode') IS NULL
 BEGIN
     ALTER TABLE dbo.EventCodes
     ADD DisplayMode nvarchar(30) NULL;
-END;
-
-IF COL_LENGTH('dbo.EventCodes', 'DisplayMode') IS NOT NULL
-BEGIN
-    EXEC(N'
-        UPDATE dbo.EventCodes
-           SET DisplayMode = ''Schedule Overlay''
-         WHERE DisplayMode IS NULL
-            OR LTRIM(RTRIM(DisplayMode)) = '''';
-    ');
 END;
 
 IF OBJECT_ID('dbo.DF_EventCodes_DisplayMode', 'D') IS NULL
@@ -1052,16 +613,6 @@ IF COL_LENGTH('dbo.EventCodes', 'ScheduledRemindersJson') IS NULL
 BEGIN
     ALTER TABLE dbo.EventCodes
     ADD ScheduledRemindersJson nvarchar(max) NULL;
-END;
-
-IF COL_LENGTH('dbo.EventCodes', 'ScheduledRemindersJson') IS NOT NULL
-BEGIN
-    EXEC(N'
-        UPDATE dbo.EventCodes
-           SET ScheduledRemindersJson = NULL
-         WHERE ScheduledRemindersJson IS NOT NULL
-           AND ISJSON(ScheduledRemindersJson) <> 1;
-    ');
 END;
 
 IF OBJECT_ID('dbo.CK_EventCodes_ScheduledRemindersJson_IsJson', 'C') IS NULL
@@ -1131,39 +682,6 @@ BEGIN
     );
 END;
 
-IF OBJECT_ID('dbo.ScheduleUserTypes', 'U') IS NOT NULL
-AND NOT EXISTS (SELECT 1 FROM dbo.ScheduleAssignments)
-BEGIN
-    INSERT INTO dbo.ScheduleAssignments (
-        ScheduleId,
-        UserOid,
-        ShiftId,
-        StartDate,
-        EndDate,
-        CreatedAt,
-        CreatedBy,
-        EndedAt,
-        EndedBy,
-        IsActive,
-        DeletedAt,
-        DeletedBy
-    )
-    SELECT
-        ScheduleId,
-        UserOid,
-        EmployeeTypeId,
-        StartDate,
-        EndDate,
-        CreatedAt,
-        CreatedBy,
-        EndedAt,
-        EndedBy,
-        IsActive,
-        DeletedAt,
-        DeletedBy
-    FROM dbo.ScheduleUserTypes;
-END;
-
 IF OBJECT_ID('dbo.ScheduleEvents', 'U') IS NULL
 BEGIN
     CREATE TABLE dbo.ScheduleEvents (
@@ -1199,32 +717,10 @@ BEGIN
     ADD ShiftId int NULL;
 END;
 
-IF COL_LENGTH('dbo.ScheduleEvents', 'ShiftId') IS NOT NULL
-AND COL_LENGTH('dbo.ScheduleEvents', 'EmployeeTypeId') IS NOT NULL
-BEGIN
-    EXEC(N'
-        UPDATE dbo.ScheduleEvents
-           SET ShiftId = EmployeeTypeId
-         WHERE ShiftId IS NULL
-           AND EmployeeTypeId IS NOT NULL;
-    ');
-END;
-
 IF COL_LENGTH('dbo.ScheduleEvents', 'EventCodeId') IS NULL
 BEGIN
     ALTER TABLE dbo.ScheduleEvents
     ADD EventCodeId int NULL;
-END;
-
-IF COL_LENGTH('dbo.ScheduleEvents', 'EventCodeId') IS NOT NULL
-AND COL_LENGTH('dbo.ScheduleEvents', 'CoverageCodeId') IS NOT NULL
-BEGIN
-    EXEC(N'
-        UPDATE dbo.ScheduleEvents
-           SET EventCodeId = CoverageCodeId
-         WHERE EventCodeId IS NULL
-           AND CoverageCodeId IS NOT NULL;
-    ');
 END;
 
 IF COL_LENGTH('dbo.ScheduleEvents', 'CustomCode') IS NULL
@@ -1251,31 +747,6 @@ BEGIN
     ADD CustomColor nvarchar(20) NULL;
 END;
 
-IF COL_LENGTH('dbo.ScheduleEvents', 'NotifyImmediately') IS NOT NULL
-BEGIN
-    DECLARE @ScheduleEventsNotifyDefaultConstraint sysname;
-    SELECT @ScheduleEventsNotifyDefaultConstraint = dc.name
-    FROM sys.default_constraints dc
-    INNER JOIN sys.columns c
-        ON c.object_id = dc.parent_object_id
-       AND c.column_id = dc.parent_column_id
-    WHERE dc.parent_object_id = OBJECT_ID('dbo.ScheduleEvents')
-      AND c.name = 'NotifyImmediately';
-
-    IF @ScheduleEventsNotifyDefaultConstraint IS NOT NULL
-    BEGIN
-        DECLARE @DropScheduleEventsNotifyDefaultSql nvarchar(400);
-        SET @DropScheduleEventsNotifyDefaultSql =
-            N'ALTER TABLE dbo.ScheduleEvents DROP CONSTRAINT ' +
-            QUOTENAME(@ScheduleEventsNotifyDefaultConstraint) +
-            N';';
-        EXEC sp_executesql @DropScheduleEventsNotifyDefaultSql;
-    END;
-
-    ALTER TABLE dbo.ScheduleEvents
-    DROP COLUMN NotifyImmediately;
-END;
-
 IF COL_LENGTH('dbo.ScheduleEvents', 'ScheduledRemindersJson') IS NULL
 BEGIN
     ALTER TABLE dbo.ScheduleEvents
@@ -1286,26 +757,6 @@ IF COL_LENGTH('dbo.ScheduleEvents', 'ReminderDispatchStateJson') IS NULL
 BEGIN
     ALTER TABLE dbo.ScheduleEvents
     ADD ReminderDispatchStateJson nvarchar(max) NULL;
-END;
-
-IF COL_LENGTH('dbo.ScheduleEvents', 'ScheduledRemindersJson') IS NOT NULL
-BEGIN
-    EXEC(N'
-        UPDATE dbo.ScheduleEvents
-           SET ScheduledRemindersJson = NULL
-         WHERE ScheduledRemindersJson IS NOT NULL
-           AND ISJSON(ScheduledRemindersJson) <> 1;
-    ');
-END;
-
-IF COL_LENGTH('dbo.ScheduleEvents', 'ReminderDispatchStateJson') IS NOT NULL
-BEGIN
-    EXEC(N'
-        UPDATE dbo.ScheduleEvents
-           SET ReminderDispatchStateJson = NULL
-         WHERE ReminderDispatchStateJson IS NOT NULL
-           AND ISJSON(ReminderDispatchStateJson) <> 1;
-    ');
 END;
 
 IF OBJECT_ID('dbo.CK_ScheduleEvents_ScheduledRemindersJson_IsJson', 'C') IS NULL
@@ -1376,45 +827,6 @@ BEGIN
             OR CustomColor LIKE ''#[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]''
         );
     ');
-END;
-
-IF OBJECT_ID('dbo.CK_ScheduleAssignments_DisplayOrder_Positive', 'C') IS NOT NULL
-BEGIN
-    ALTER TABLE dbo.ScheduleAssignments DROP CONSTRAINT CK_ScheduleAssignments_DisplayOrder_Positive;
-END;
-
-IF EXISTS (
-    SELECT 1 FROM sys.indexes
-    WHERE name = 'IX_ScheduleAssignments_Schedule_DisplayOrder_Active'
-      AND object_id = OBJECT_ID('dbo.ScheduleAssignments')
-)
-BEGIN
-    DROP INDEX IX_ScheduleAssignments_Schedule_DisplayOrder_Active ON dbo.ScheduleAssignments;
-END;
-
-IF COL_LENGTH('dbo.ScheduleAssignments', 'DisplayOrder') IS NOT NULL
-BEGIN
-    DECLARE @ScheduleAssignmentsDisplayOrderDefaultConstraint sysname;
-    SELECT @ScheduleAssignmentsDisplayOrderDefaultConstraint = dc.name
-    FROM sys.default_constraints dc
-    INNER JOIN sys.columns c
-        ON c.object_id = dc.parent_object_id
-       AND c.column_id = dc.parent_column_id
-    WHERE dc.parent_object_id = OBJECT_ID('dbo.ScheduleAssignments')
-      AND c.name = 'DisplayOrder';
-
-    IF @ScheduleAssignmentsDisplayOrderDefaultConstraint IS NOT NULL
-    BEGIN
-        DECLARE @DropScheduleAssignmentsDisplayOrderDefaultSql nvarchar(400);
-        SET @DropScheduleAssignmentsDisplayOrderDefaultSql =
-            N'ALTER TABLE dbo.ScheduleAssignments DROP CONSTRAINT ' +
-            QUOTENAME(@ScheduleAssignmentsDisplayOrderDefaultConstraint) +
-            N';';
-        EXEC sp_executesql @DropScheduleAssignmentsDisplayOrderDefaultSql;
-    END;
-
-    ALTER TABLE dbo.ScheduleAssignments
-    DROP COLUMN DisplayOrder;
 END;
 
 IF NOT EXISTS (

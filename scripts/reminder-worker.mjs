@@ -15,6 +15,10 @@ function log(message, extra) {
 	console.log(`[reminder-worker] ${message}`, extra);
 }
 
+function errorMessage(error) {
+	return error instanceof Error ? error.message : 'Unknown error';
+}
+
 async function dispatchOnce() {
 	const response = await fetch(endpoint, {
 		method: 'POST'
@@ -22,6 +26,14 @@ async function dispatchOnce() {
 
 	const bodyText = await response.text();
 	if (!response.ok) {
+		if (response.status === 503) {
+			return {
+				skipped: true,
+				reason: 'database_unavailable',
+				status: response.status,
+				body: bodyText
+			};
+		}
 		throw new Error(`Dispatch failed (${response.status}): ${bodyText}`);
 	}
 
@@ -52,10 +64,7 @@ async function main() {
 			const summary = await dispatchOnce();
 			log('dispatch complete', summary);
 		} catch (error) {
-			log(
-				'dispatch failed',
-				error instanceof Error ? error.message : 'Unknown reminder worker error'
-			);
+			log('dispatch failed', errorMessage(error));
 		}
 
 		const elapsedMs = Date.now() - startedAt;
@@ -64,7 +73,17 @@ async function main() {
 	}
 }
 
+process.on('unhandledRejection', (reason) => {
+	log('unhandled rejection', errorMessage(reason));
+});
+
+process.on('uncaughtException', (err) => {
+	log('uncaught exception', errorMessage(err));
+});
+
 main().catch((error) => {
-	log('fatal error', error instanceof Error ? error.message : 'Unknown fatal error');
-	process.exitCode = 1;
+	log('fatal error', errorMessage(error));
+	if (runOnce) {
+		process.exitCode = 1;
+	}
 });

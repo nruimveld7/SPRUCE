@@ -33,6 +33,11 @@ const CONTENT_BY_REASON: Record<string, AuthErrorContent> = {
 		description: 'Microsoft Entra returned an error while processing your sign-in.',
 		helpText: 'Try signing in again with a fresh login attempt.'
 	},
+	login_failed: {
+		title: 'Sign-in could not be started',
+		description: 'The sign-in request could not be prepared for this environment.',
+		helpText: 'Verify authentication configuration and try again.'
+	},
 	callback_failed: FALLBACK_CONTENT
 };
 

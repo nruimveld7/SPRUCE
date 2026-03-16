@@ -41,6 +41,8 @@ const AUTH_PENDING_MAX_ENTRIES = 5;
 const SESSION_MAX_AGE_SEC = 8 * 60 * 60;
 const COOKIE_SECURE = env.NODE_ENV === 'production';
 const SESSION_CLEANUP_INTERVAL_MS = 15 * 60 * 1000;
+const DEFAULT_ENTRA_CLIENT_CERT_PRIVATE_KEY_PATH = '/app/certs/entra-client.key';
+const DEFAULT_ENTRA_CLIENT_CERT_PUBLIC_CERT_PATH = '/app/certs/entra-client.crt';
 
 let discoveryPromise: Promise<OidcDiscovery> | null = null;
 let lastSessionCleanupAt = 0;
@@ -51,6 +53,11 @@ function requireEnv(name: string): string {
 		throw error(500, `Missing required env var: ${name}`);
 	}
 	return value;
+}
+
+function getEnvOrDefault(name: string, fallback: string): string {
+	const value = env[name]?.trim();
+	return value ? value : fallback;
 }
 
 function parseOidList(value: string | undefined): Set<string> {
@@ -140,7 +147,7 @@ export async function getAuthorizeUrl(url: URL, headers?: Headers) {
 		response_type: 'code',
 		redirect_uri: redirectUri,
 		response_mode: 'query',
-		scope: 'openid profile email offline_access User.ReadBasic.All',
+		scope: 'openid profile email offline_access User.ReadBasic.All Mail.Send',
 		state,
 		nonce,
 		code_challenge: codeChallenge,
@@ -257,8 +264,14 @@ function consumeAuthState(
 
 async function createClientAssertion(tokenEndpoint: string): Promise<string> {
 	const clientId = requireEnv('ENTRA_CLIENT_ID');
-	const keyPath = requireEnv('ENTRA_CLIENT_CERT_PRIVATE_KEY_PATH');
-	const certPath = requireEnv('ENTRA_CLIENT_CERT_PUBLIC_CERT_PATH');
+	const keyPath = getEnvOrDefault(
+		'ENTRA_CLIENT_CERT_PRIVATE_KEY_PATH',
+		DEFAULT_ENTRA_CLIENT_CERT_PRIVATE_KEY_PATH
+	);
+	const certPath = getEnvOrDefault(
+		'ENTRA_CLIENT_CERT_PUBLIC_CERT_PATH',
+		DEFAULT_ENTRA_CLIENT_CERT_PUBLIC_CERT_PATH
+	);
 	const privateKeyPem = await readFile(keyPath, 'utf8');
 	const certPem = await readFile(certPath, 'utf8');
 
@@ -362,7 +375,7 @@ async function refreshTokens(refreshToken: string): Promise<TokenResponse> {
 		grant_type: 'refresh_token',
 		client_id: clientId,
 		refresh_token: refreshToken,
-		scope: 'openid profile email offline_access User.ReadBasic.All',
+		scope: 'openid profile email offline_access User.ReadBasic.All Mail.Send',
 		client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
 		client_assertion: clientAssertion
 	});

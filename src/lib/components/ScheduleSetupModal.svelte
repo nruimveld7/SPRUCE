@@ -5,6 +5,7 @@
 	import ConfirmDialog, { type ConfirmDialogOption } from '$lib/components/ConfirmDialog.svelte';
 	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
 	import ColorPicker from '$lib/components/ColorPicker.svelte';
+	import HorizontalScrollArea from '$lib/components/HorizontalScrollArea.svelte';
 	import { fetchWithAuthRedirect as fetchWithAuthRedirectUtil } from '$lib/utils/fetchWithAuthRedirect';
 
 	type ScheduleRole = 'Member' | 'Maintainer' | 'Manager';
@@ -1687,62 +1688,64 @@
 															</div>
 
 															<div class="managerThemeTableWrap">
-																<table class="managerThemeTable">
-																	<thead>
-																		<tr>
-																			<th scope="col">Setting</th>
-																			<th scope="col">Color</th>
-																			<th scope="col">Setting</th>
-																			<th scope="col">Color</th>
-																		</tr>
-																	</thead>
-																	<tbody>
-																		{#each activeThemeFieldRows as themeRow}
+																<HorizontalScrollArea>
+																	<table class="managerThemeTable">
+																		<thead>
 																			<tr>
-																				<th scope="row">{themeRow[0].label}</th>
-																				<td class="managerThemeColorCell">
-																					<div class="managerThemeField">
-																						<ColorPicker
-																							id={`manager-theme-${themeRow[0].key}`}
-																							label={themeRow[0].label}
-																							value={selectedManagerDraft.themes[selectedThemeMode][
-																								themeRow[0].key
-																							]}
-																							on:change={(event) =>
-																								handleManagerThemeInput(
-																									themeRow[0].key,
-																									event.detail
-																								)}
-																						/>
-																					</div>
-																				</td>
-																				{#if themeRow[1]}
-																					<th scope="row" class="managerThemeSettingDivider">
-																						{themeRow[1].label}
-																					</th>
+																				<th scope="col">Setting</th>
+																				<th scope="col">Color</th>
+																				<th scope="col">Setting</th>
+																				<th scope="col">Color</th>
+																			</tr>
+																		</thead>
+																		<tbody>
+																			{#each activeThemeFieldRows as themeRow}
+																				<tr>
+																					<th scope="row">{themeRow[0].label}</th>
 																					<td class="managerThemeColorCell">
 																						<div class="managerThemeField">
 																							<ColorPicker
-																								id={`manager-theme-${themeRow[1].key}`}
-																								label={themeRow[1].label}
+																								id={`manager-theme-${themeRow[0].key}`}
+																								label={themeRow[0].label}
 																								value={selectedManagerDraft.themes[selectedThemeMode][
-																									themeRow[1].key
+																									themeRow[0].key
 																								]}
 																								on:change={(event) =>
 																									handleManagerThemeInput(
-																										themeRow[1].key,
+																										themeRow[0].key,
 																										event.detail
 																									)}
 																							/>
 																						</div>
 																					</td>
-																				{:else}
-																					<td colspan="2"></td>
-																				{/if}
-																			</tr>
-																		{/each}
-																	</tbody>
-																</table>
+																					{#if themeRow[1]}
+																						<th scope="row" class="managerThemeSettingDivider">
+																							{themeRow[1].label}
+																						</th>
+																						<td class="managerThemeColorCell">
+																							<div class="managerThemeField">
+																								<ColorPicker
+																									id={`manager-theme-${themeRow[1].key}`}
+																									label={themeRow[1].label}
+																									value={selectedManagerDraft.themes[selectedThemeMode][
+																										themeRow[1].key
+																									]}
+																									on:change={(event) =>
+																										handleManagerThemeInput(
+																											themeRow[1].key,
+																											event.detail
+																										)}
+																								/>
+																							</div>
+																						</td>
+																					{:else}
+																						<td colspan="2"></td>
+																					{/if}
+																				</tr>
+																			{/each}
+																		</tbody>
+																	</table>
+																</HorizontalScrollArea>
 															</div>
 														</div>
 													{/if}

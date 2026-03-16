@@ -1,8 +1,10 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { GetPool } from '$lib/server/db';
+import { getSessionAccessToken } from '$lib/server/auth';
 import { sendAccessRemovedNotification } from '$lib/server/mail/notifications';
 import sql from 'mssql';
+import { isBootstrapManager, requireScheduleRole } from '$lib/server/schedule-access';
 
 type ScheduleDeactivationEmailTarget = {
 	targetDisplayName: string;
@@ -104,7 +106,8 @@ async function getScheduleDeactivationEmailContext(params: {
 	};
 }
 
-export const POST: RequestHandler = async ({ locals, request }) => {
+export const POST: RequestHandler = async (event) => {
+	const { locals, request } = event;
 	const user = locals.user;
 	if (!user) {
 		throw error(401, 'Unauthorized');
@@ -121,24 +124,14 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 	await tx.begin();
 	try {
 		let scheduleDeactivationEmailContext: ScheduleDeactivationEmailContext | null = null;
-		const managerAccessResult = await new sql.Request(tx)
-			.input('userOid', user.id)
-			.input('scheduleId', scheduleId)
-			.query(
-				`SELECT TOP (1) 1 AS HasManagerAccess
-				 FROM dbo.ScheduleUsers su
-				 INNER JOIN dbo.Roles r
-				   ON r.RoleId = su.RoleId
-				 WHERE su.UserOid = @userOid
-				   AND su.ScheduleId = @scheduleId
-				   AND su.IsActive = 1
-				   AND su.DeletedAt IS NULL
-				   AND r.RoleName = 'Manager';`
-			);
-
-		if (!managerAccessResult.recordset?.[0]?.HasManagerAccess) {
-			throw error(403, 'Only managers can change schedule state');
-		}
+		await requireScheduleRole({
+			userOid: user.id,
+			scheduleId,
+			minRole: 'Manager',
+			pool,
+			errorMessage: 'Only managers can change schedule state'
+		});
+		const actorIsBootstrap = await isBootstrapManager(user.id, pool);
 
 		const scheduleVersionResult = await new sql.Request(tx)
 			.input('scheduleId', scheduleId)
@@ -214,13 +207,28 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 			   AND r.RoleName = 'Manager';`
 		);
 		const managerCount = Number(managerCountResult.recordset?.[0]?.ManagerCount ?? 0);
+		const actorExplicitManagerResult = await new sql.Request(tx)
+			.input('scheduleId', scheduleId)
+			.input('userOid', user.id)
+			.query(
+				`SELECT TOP (1) 1 AS IsExplicitManager
+				 FROM dbo.ScheduleUsers su
+				 INNER JOIN dbo.Roles r
+				   ON r.RoleId = su.RoleId
+				 WHERE su.ScheduleId = @scheduleId
+				   AND su.UserOid = @userOid
+				   AND su.IsActive = 1
+				   AND su.DeletedAt IS NULL
+				   AND r.RoleName = 'Manager';`
+			);
+		const isExplicitManager = Boolean(actorExplicitManagerResult.recordset?.[0]?.IsExplicitManager);
 
-		if (managerCount <= 0) {
+		if (managerCount <= 0 && !actorIsBootstrap) {
 			throw error(400, 'No active manager exists for this schedule');
 		}
 
 		if (!confirmDeactivation) {
-			if (managerCount > 1) {
+			if (managerCount > 1 && isExplicitManager) {
 					await tx.rollback();
 					return json(
 						{
@@ -246,7 +254,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 				);
 			}
 
-		if (managerCount > 1) {
+		if (managerCount > 1 && isExplicitManager) {
 			const serverDateResult = await new sql.Request(tx).query(
 				`SELECT CONVERT(date, SYSUTCDATETIME()) AS Today;`
 			);
@@ -444,13 +452,15 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 
 			if (intendedRecipients.length > 0) {
 				try {
+					const delegatedAccessToken = await getSessionAccessToken(event);
 					await sendAccessRemovedNotification({
 						scheduleName: scheduleDeactivationEmailContext.scheduleName,
 						themeJson: scheduleDeactivationEmailContext.scheduleThemeJson,
 						intendedRecipients,
 						targetMemberName,
 						triggeringUserName: scheduleDeactivationEmailContext.actorDisplayName,
-						status: 'Schedule Deactivated'
+						status: 'Schedule Deactivated',
+						delegatedAccessToken
 					});
 				} catch (notificationError) {
 					console.error('Schedule deactivation access removed notification failed:', notificationError);

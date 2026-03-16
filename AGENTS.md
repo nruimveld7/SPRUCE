@@ -141,9 +141,8 @@ Defined in compose/env files outside this directory:
 - `ENTRA_TENANT_ID`
 - `ENTRA_CLIENT_ID`
 - `ENTRA_REDIRECT_URI`
-- `ENTRA_CLIENT_CERT_PRIVATE_KEY_PATH`
-- `ENTRA_CLIENT_CERT_PUBLIC_CERT_PATH`
-- `APP_SESSION_SECRET`
+- `ENTRA_CLIENT_CERT_PRIVATE_KEY_PATH` (optional override; default: `/app/certs/entra-client.key`)
+- `ENTRA_CLIENT_CERT_PUBLIC_CERT_PATH` (optional override; default: `/app/certs/entra-client.crt`)
 - `BOOTSTRAP_MANAGER_OIDS`
 - `DEV_CONSOLE_ALLOWED_OIDS` (optional, dev-only console command allowlist)
 

@@ -107,14 +107,50 @@
   z-index: 500;
   width: min(460px, calc(100vw - 24px));
   max-height: min(62vh, 520px);
-  overflow: auto;
-  padding: 10px;
+  overflow: hidden;
+  padding: 0;
   border: 1px solid var(--modal-border);
   border-radius: 12px;
   background: var(--modal-surface);
   box-shadow: var(--shadow);
   color: var(--text);
   pointer-events: none;
+}
+
+.memberEventsHoverTooltipScroll {
+  max-height: inherit;
+  overflow: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  padding: 10px;
+}
+
+.memberEventsHoverTooltipScroll.hasScrollbar {
+  padding-right: calc(10px + var(--scrollbar-size) + 4px);
+}
+
+.memberEventsHoverTooltipScroll::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.memberEventsHoverTooltipRail {
+  position: absolute;
+  top: 8px;
+  right: 5px;
+  bottom: 8px;
+  width: var(--scrollbar-size);
+  z-index: 2;
+  border-radius: var(--scrollbar-radius);
+  background: var(--scrollbar-track-bg);
+}
+
+.memberEventsHoverTooltipThumb {
+  width: 100%;
+  z-index: 3;
+  border-radius: var(--scrollbar-radius);
+  background: var(--scrollbar-thumb-bg);
+  border: var(--scrollbar-thumb-border);
 }
 
 .memberEventsHoverTooltipTitle {

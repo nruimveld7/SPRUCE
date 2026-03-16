@@ -3,6 +3,7 @@ import type { RequestHandler } from './$types';
 import { GetPool } from '$lib/server/db';
 import { setActiveScheduleForSession } from '$lib/server/auth';
 import { getDefaultScheduleThemeJson } from '$lib/server/schedule-theme';
+import { hasGlobalManagerAccess } from '$lib/server/schedule-access';
 
 function parseScheduleName(value: unknown): string {
 	if (typeof value !== 'string') {
@@ -26,21 +27,8 @@ export const POST: RequestHandler = async ({ locals, cookies, request }) => {
 	const themeJson = getDefaultScheduleThemeJson();
 	const pool = await GetPool();
 
-	const managerAccessResult = await pool.request().input('userOid', user.id).query(
-		`SELECT TOP (1) 1 AS HasManagerAccess
-		 FROM dbo.ScheduleUsers su
-		 INNER JOIN dbo.Roles r
-			 ON r.RoleId = su.RoleId
-		 INNER JOIN dbo.Schedules s
-			 ON s.ScheduleId = su.ScheduleId
-		 WHERE su.UserOid = @userOid
-		   AND su.IsActive = 1
-		   AND su.DeletedAt IS NULL
-		   AND r.RoleName = 'Manager'
-		   AND s.DeletedAt IS NULL;`
-	);
-
-	if (!managerAccessResult.recordset?.[0]?.HasManagerAccess) {
+	const hasManagerAccess = await hasGlobalManagerAccess(user.id, pool);
+	if (!hasManagerAccess) {
 		throw error(403, 'Only managers can create schedules');
 	}
 

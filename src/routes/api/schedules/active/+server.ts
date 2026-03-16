@@ -1,7 +1,8 @@
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
-import { GetPool } from '$lib/server/db';
 import { setActiveScheduleForSession } from '$lib/server/auth';
+import { GetPool } from '$lib/server/db';
+import { userCanAccessSchedule } from '$lib/server/schedule-access';
 
 function parseScheduleId(value: unknown): number {
 	if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
@@ -20,26 +21,8 @@ export const POST: RequestHandler = async ({ locals, cookies, request }) => {
 	const scheduleId = parseScheduleId(body?.scheduleId);
 
 	const pool = await GetPool();
-	const accessResult = await pool
-		.request()
-		.input('userOid', user.id)
-		.input('scheduleId', scheduleId)
-		.query(
-			`SELECT TOP (1) 1 AS HasAccess
-			 FROM dbo.ScheduleUsers su
-			 INNER JOIN dbo.Schedules s
-			   ON s.ScheduleId = su.ScheduleId
-			 LEFT JOIN dbo.Roles r
-			   ON r.RoleId = su.RoleId
-			 WHERE su.UserOid = @userOid
-			   AND su.ScheduleId = @scheduleId
-			   AND su.IsActive = 1
-			   AND su.DeletedAt IS NULL
-			   AND s.DeletedAt IS NULL
-			   AND (s.IsActive = 1 OR r.RoleName = 'Manager');`
-		);
-
-	if (!accessResult.recordset?.[0]?.HasAccess) {
+	const hasAccess = await userCanAccessSchedule({ userOid: user.id, scheduleId, pool });
+	if (!hasAccess) {
 		throw error(403, 'You do not have access to this schedule');
 	}
 

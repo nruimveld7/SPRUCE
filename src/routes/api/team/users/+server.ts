@@ -10,6 +10,7 @@ import {
 	sendAccessGrantedNotification,
 	sendAccessRemovedNotification
 } from '$lib/server/mail/notifications';
+import { requireScheduleRole } from '$lib/server/schedule-access';
 
 type ScheduleRole = 'Member' | 'Maintainer' | 'Manager';
 
@@ -43,6 +44,9 @@ type AnyAssignmentCountRow = {
 
 type ActiveMembershipCountRow = {
 	ActiveMembershipCount: number;
+};
+type ActiveBootstrapCountRow = {
+	ActiveBootstrapCount: number;
 };
 
 type ConfirmRemovalPayload = {
@@ -133,32 +137,13 @@ async function getActorContext(localsUserOid: string, cookies: Cookies) {
 	}
 
 	const pool = await GetPool();
-	const accessResult = await pool
-		.request()
-		.input('scheduleId', scheduleId)
-		.input('userOid', localsUserOid)
-		.query(
-			`SELECT TOP (1) r.RoleName
-			 FROM dbo.ScheduleUsers su
-			 INNER JOIN dbo.Roles r
-			   ON r.RoleId = su.RoleId
-			 WHERE su.ScheduleId = @scheduleId
-			   AND su.UserOid = @userOid
-			   AND su.IsActive = 1
-			   AND su.DeletedAt IS NULL
-			 ORDER BY
-			   CASE r.RoleName
-				 WHEN 'Manager' THEN 3
-				 WHEN 'Maintainer' THEN 2
-				 WHEN 'Member' THEN 1
-				 ELSE 0
-			   END DESC;`
-		);
-
-	const role = accessResult.recordset?.[0]?.RoleName as ScheduleRole | undefined;
-	if (role !== 'Manager' && role !== 'Maintainer') {
-		throw error(403, 'Insufficient permissions');
-	}
+	const { role } = await requireScheduleRole({
+		userOid: localsUserOid,
+		scheduleId,
+		minRole: 'Maintainer',
+		pool,
+		errorMessage: 'Insufficient permissions'
+	});
 
 	return {
 		pool,
@@ -350,7 +335,8 @@ export const GET: RequestHandler = async (event) => {
 	return json({ users });
 };
 
-export const POST: RequestHandler = async ({ locals, cookies, request }) => {
+export const POST: RequestHandler = async (event) => {
+	const { locals, cookies, request } = event;
 	const currentUser = locals.user;
 	if (!currentUser) {
 		throw error(401, 'Unauthorized');
@@ -475,13 +461,15 @@ export const POST: RequestHandler = async ({ locals, cookies, request }) => {
 		});
 		if (emailContext) {
 			try {
+				const delegatedAccessToken = await getSessionAccessToken(event);
 				await sendAccessGrantedNotification({
 					scheduleName: emailContext.scheduleName,
 					themeJson: emailContext.scheduleThemeJson,
 					intendedRecipients: emailContext.targetEmail ? [emailContext.targetEmail] : [],
 					targetMemberName: emailContext.targetDisplayName,
 					authorizedByName: emailContext.actorDisplayName,
-					status: role
+					status: role,
+					delegatedAccessToken
 				});
 			} catch (notificationError) {
 				console.error('Access granted notification failed:', notificationError);
@@ -495,7 +483,8 @@ export const POST: RequestHandler = async ({ locals, cookies, request }) => {
 	}
 };
 
-export const PATCH: RequestHandler = async ({ locals, cookies, request }) => {
+export const PATCH: RequestHandler = async (event) => {
+	const { locals, cookies, request } = event;
 	const currentUser = locals.user;
 	if (!currentUser) {
 		throw error(401, 'Unauthorized');
@@ -590,13 +579,15 @@ export const PATCH: RequestHandler = async ({ locals, cookies, request }) => {
 				});
 				if (emailContext) {
 					try {
+						const delegatedAccessToken = await getSessionAccessToken(event);
 						await sendAccessChangedNotification({
 							scheduleName: emailContext.scheduleName,
 							themeJson: emailContext.scheduleThemeJson,
 							intendedRecipients: emailContext.targetEmail ? [emailContext.targetEmail] : [],
 							targetMemberName: emailContext.targetDisplayName,
 							authorizedByName: emailContext.actorDisplayName,
-							status: nextRole
+							status: nextRole,
+							delegatedAccessToken
 						});
 					} catch (notificationError) {
 						console.error('Access changed notification failed:', notificationError);
@@ -611,7 +602,8 @@ export const PATCH: RequestHandler = async ({ locals, cookies, request }) => {
 	}
 };
 
-export const DELETE: RequestHandler = async ({ locals, cookies, request }) => {
+export const DELETE: RequestHandler = async (event) => {
+	const { locals, cookies, request } = event;
 	const currentUser = locals.user;
 	if (!currentUser) {
 		throw error(401, 'Unauthorized');
@@ -777,21 +769,34 @@ export const DELETE: RequestHandler = async ({ locals, cookies, request }) => {
 			(activeMembershipResult.recordset?.[0] as ActiveMembershipCountRow | undefined)
 				?.ActiveMembershipCount ?? 0
 		);
+		const activeBootstrapResult = await new sql.Request(tx)
+			.input('targetUserOid', targetUserOid)
+			.query(
+				`SELECT COUNT(*) AS ActiveBootstrapCount
+				 FROM dbo.BootstrapManagers bm
+				 WHERE bm.UserOid = @targetUserOid
+				   AND bm.IsActive = 1
+				   AND bm.DeletedAt IS NULL;`
+			);
+		const activeBootstrapCount = Number(
+			(activeBootstrapResult.recordset?.[0] as ActiveBootstrapCountRow | undefined)
+				?.ActiveBootstrapCount ?? 0
+		);
+		const hasBootstrapAccess = activeBootstrapCount > 0;
 
 		let removalMode: 'hard_deleted' | 'soft_deactivated' | 'schedule_removed_only' =
 			'schedule_removed_only';
 
-		if (!hasEverAssignment && activeMembershipCount === 0) {
+		if (!hasEverAssignment && activeMembershipCount === 0 && !hasBootstrapAccess) {
 			await new sql.Request(tx)
 				.input('targetUserOid', targetUserOid)
 				.query(
 					`DELETE FROM dbo.ScheduleEvents WHERE UserOid = @targetUserOid;
-					 DELETE FROM dbo.BootstrapManagers WHERE UserOid = @targetUserOid;
 					 DELETE FROM dbo.ScheduleUsers WHERE UserOid = @targetUserOid;
 					 DELETE FROM dbo.Users WHERE UserOid = @targetUserOid;`
 				);
 			removalMode = 'hard_deleted';
-		} else if (activeMembershipCount === 0) {
+		} else if (activeMembershipCount === 0 && !hasBootstrapAccess) {
 			await new sql.Request(tx)
 				.input('targetUserOid', targetUserOid)
 				.input('actorUserOid', ctx.userOid)
@@ -810,12 +815,14 @@ export const DELETE: RequestHandler = async ({ locals, cookies, request }) => {
 
 		if (emailContext) {
 			try {
+				const delegatedAccessToken = await getSessionAccessToken(event);
 				await sendAccessRemovedNotification({
 					scheduleName: emailContext.scheduleName,
 					themeJson: emailContext.scheduleThemeJson,
 					intendedRecipients: emailContext.targetEmail ? [emailContext.targetEmail] : [],
 					targetMemberName: emailContext.targetDisplayName,
-					triggeringUserName: emailContext.actorDisplayName
+					triggeringUserName: emailContext.actorDisplayName,
+					delegatedAccessToken
 				});
 			} catch (notificationError) {
 				console.error('Access removed notification failed:', notificationError);

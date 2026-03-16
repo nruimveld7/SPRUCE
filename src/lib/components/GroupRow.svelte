@@ -2,6 +2,7 @@
 	import type { MonthDay } from '$lib/utils/date';
 	import type { ScheduleEvent } from '$lib/types/schedule';
 	import { hasHoverEventsForCell, resolveCellEventVisuals } from '$lib/utils/scheduleEvents';
+	import { longPress } from '$lib/actions/longPress';
 
 	export let groupName = '';
 	export let employeeTypeId: number | null = null;
@@ -21,7 +22,7 @@
 	export let mergeFirstTwoColumns = false;
 	export let onSelectDay: (day: number) => void = () => {};
 	export let onDoubleClickDay: (day: MonthDay) => void = () => {};
-	export let onShiftCellContextMenu: (event: MouseEvent) => void = () => {};
+	export let onShiftCellContextMenu: (event?: MouseEvent) => void = () => {};
 	export let onHoverShiftCell: (pointer: { clientX: number; clientY: number }) => void = () => {};
 	export let onLeaveShiftCell: () => void = () => {};
 	export let onHoverDayCell: (
@@ -91,6 +92,7 @@
 	aria-label={ariaLabel}
 	on:click={onToggle}
 	on:contextmenu={onShiftCellContextMenu}
+	use:longPress={{ onLongPress: () => onShiftCellContextMenu() }}
 	on:mouseenter={(event) => onHoverShiftCell({ clientX: event.clientX, clientY: event.clientY })}
 	on:mousemove={(event) => onHoverShiftCell({ clientX: event.clientX, clientY: event.clientY })}
 	on:mouseleave={onLeaveShiftCell}
@@ -133,6 +135,7 @@
 			event.preventDefault();
 			onDoubleClickDay(day);
 		}}
+		use:longPress={{ onLongPress: () => onDoubleClickDay(day) }}
 		on:keydown={(event) => {
 			if (event.key === 'Enter' || event.key === ' ') {
 				event.preventDefault();

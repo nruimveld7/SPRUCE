@@ -4,8 +4,7 @@ import type { Cookies } from '@sveltejs/kit';
 import { GetPool } from '$lib/server/db';
 import { getActiveScheduleId } from '$lib/server/auth';
 import sql from 'mssql';
-
-type ScheduleRole = 'Member' | 'Maintainer' | 'Manager';
+import { requireScheduleRole } from '$lib/server/schedule-access';
 
 function normalizeOid(value: string): string {
 	return value.trim().toLowerCase();
@@ -29,34 +28,15 @@ async function getActorContext(localsUserOid: string, cookies: Cookies) {
 	}
 
 	const pool = await GetPool();
-	const accessResult = await pool
-		.request()
-		.input('scheduleId', scheduleId)
-		.input('userOid', localsUserOid)
-		.query(
-			`SELECT TOP (1) r.RoleName
-			 FROM dbo.ScheduleUsers su
-			 INNER JOIN dbo.Roles r
-			   ON r.RoleId = su.RoleId
-			 WHERE su.ScheduleId = @scheduleId
-			   AND UPPER(LTRIM(RTRIM(su.UserOid))) = UPPER(LTRIM(RTRIM(@userOid)))
-			   AND su.IsActive = 1
-			   AND su.DeletedAt IS NULL
-			 ORDER BY
-			   CASE r.RoleName
-				 WHEN 'Manager' THEN 3
-				 WHEN 'Maintainer' THEN 2
-				 WHEN 'Member' THEN 1
-				 ELSE 0
-			   END DESC;`
-		);
+	await requireScheduleRole({
+		userOid: localsUserOid,
+		scheduleId,
+		minRole: 'Member',
+		pool,
+		errorMessage: 'Insufficient permissions'
+	});
 
-	const role = accessResult.recordset?.[0]?.RoleName as ScheduleRole | undefined;
-	if (role !== 'Manager' && role !== 'Maintainer' && role !== 'Member') {
-		throw error(403, 'Insufficient permissions');
-	}
-
-	return { pool, scheduleId, role };
+	return { pool, scheduleId };
 }
 
 async function resolveTargetUserOidInSchedule(
@@ -95,8 +75,7 @@ export const PATCH: RequestHandler = async ({ locals, cookies, request }) => {
 	const targetUserOid = cleanRequiredText(body?.userOid, 64, 'User');
 	const displayName = cleanRequiredText(body?.displayName, 200, 'Display name');
 
-	const { pool, scheduleId, role } = await getActorContext(currentUser.id, cookies);
-	void role;
+	const { pool, scheduleId } = await getActorContext(currentUser.id, cookies);
 	if (normalizeOid(targetUserOid) !== normalizeOid(currentUser.id)) {
 		throw error(403, 'Users can only change their own display name');
 	}

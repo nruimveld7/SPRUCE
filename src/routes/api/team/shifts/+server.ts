@@ -2,7 +2,8 @@ import { error, json } from '@sveltejs/kit';
 import type { Cookies, RequestHandler } from '@sveltejs/kit';
 import sql from 'mssql';
 import { GetPool } from '$lib/server/db';
-import { getActiveScheduleId } from '$lib/server/auth';
+import { getActiveScheduleId, getSessionAccessToken } from '$lib/server/auth';
+import { sendShiftChangeNotification } from '$lib/server/mail/notifications';
 import {
 	cleanMonthValue,
 	getActiveShiftIdsForMonth,
@@ -11,6 +12,7 @@ import {
 	resolveShiftOrderForMonth,
 	upsertShiftOrderSnapshot
 } from '$lib/server/shift-order';
+import { requireScheduleRole } from '$lib/server/schedule-access';
 
 type ScheduleRole = 'Member' | 'Maintainer' | 'Manager';
 
@@ -30,6 +32,19 @@ type ShiftRow = {
 	PatternName: string | null;
 	StartDate: Date | string;
 	EndDate: Date | string | null;
+};
+
+type ShiftEmailContext = {
+	scheduleName: string;
+	scheduleThemeJson: string | null;
+	targetDisplayName: string;
+	targetEmail: string | null;
+	actorDisplayName: string;
+};
+
+type ImpactedShiftAssignmentNotification = {
+	userOid: string;
+	notifyDate: string;
 };
 
 type RemoveShiftPayload = {
@@ -222,34 +237,84 @@ async function getActorContext(localsUserOid: string, cookies: Cookies) {
 	}
 
 	const pool = await GetPool();
-	const accessResult = await pool
-		.request()
-		.input('scheduleId', scheduleId)
-		.input('userOid', localsUserOid)
-		.query(
-			`SELECT TOP (1) r.RoleName
-			 FROM dbo.ScheduleUsers su
-			 INNER JOIN dbo.Roles r
-			   ON r.RoleId = su.RoleId
-			 WHERE su.ScheduleId = @scheduleId
-			   AND su.UserOid = @userOid
-			   AND su.IsActive = 1
-			   AND su.DeletedAt IS NULL
-			 ORDER BY
-			   CASE r.RoleName
-				 WHEN 'Manager' THEN 3
-				 WHEN 'Maintainer' THEN 2
-				 WHEN 'Member' THEN 1
-				 ELSE 0
-			   END DESC;`
-		);
-
-	const role = accessResult.recordset?.[0]?.RoleName as ScheduleRole | undefined;
-	if (role !== 'Manager' && role !== 'Maintainer') {
-		throw error(403, 'Insufficient permissions');
-	}
+	await requireScheduleRole({
+		userOid: localsUserOid,
+		scheduleId,
+		minRole: 'Maintainer',
+		pool,
+		errorMessage: 'Insufficient permissions'
+	});
 
 	return { pool, scheduleId, actorOid: localsUserOid };
+}
+
+async function getShiftEmailContext(params: {
+	pool: sql.ConnectionPool;
+	scheduleId: number;
+	targetUserOid: string;
+	actorUserOid: string;
+}): Promise<ShiftEmailContext | null> {
+	const result = await params.pool
+		.request()
+		.input('scheduleId', params.scheduleId)
+		.input('targetUserOid', params.targetUserOid)
+		.input('actorUserOid', params.actorUserOid)
+		.query(
+			`SELECT TOP (1)
+				s.Name AS ScheduleName,
+				s.ThemeJson AS ScheduleThemeJson,
+				COALESCE(NULLIF(tu.DisplayName, ''), NULLIF(tu.FullName, ''), @targetUserOid) AS TargetDisplayName,
+				NULLIF(LTRIM(RTRIM(tu.Email)), '') AS TargetEmail,
+				COALESCE(NULLIF(au.DisplayName, ''), NULLIF(au.FullName, ''), @actorUserOid) AS ActorDisplayName
+			 FROM dbo.Schedules s
+			 LEFT JOIN dbo.Users tu
+				ON tu.UserOid = @targetUserOid
+			   AND tu.DeletedAt IS NULL
+			 LEFT JOIN dbo.Users au
+				ON au.UserOid = @actorUserOid
+			   AND au.DeletedAt IS NULL
+			 WHERE s.ScheduleId = @scheduleId
+			   AND s.DeletedAt IS NULL;`
+		);
+	const row = result.recordset?.[0];
+	if (!row) return null;
+	return {
+		scheduleName: String(row.ScheduleName ?? ''),
+		scheduleThemeJson: (row.ScheduleThemeJson as string | null) ?? null,
+		targetDisplayName: String(row.TargetDisplayName ?? params.targetUserOid),
+		targetEmail: row.TargetEmail ? String(row.TargetEmail) : null,
+		actorDisplayName: String(row.ActorDisplayName ?? params.actorUserOid)
+	};
+}
+
+async function getEffectiveShiftNameForDate(
+	request: sql.Request,
+	scheduleId: number,
+	userOid: string,
+	date: string
+): Promise<string> {
+	const result = await request
+		.input('scheduleId', scheduleId)
+		.input('userOid', userOid)
+		.input('date', date)
+		.query(
+			`SELECT TOP (1)
+				COALESCE(NULLIF(et.Name, ''), 'Unknown shift') AS ShiftName
+			 FROM dbo.ScheduleAssignments sut
+			 LEFT JOIN dbo.Shifts et
+				ON et.ScheduleId = sut.ScheduleId
+			   AND et.ShiftId = sut.ShiftId
+			   AND et.IsActive = 1
+			   AND et.DeletedAt IS NULL
+			 WHERE sut.ScheduleId = @scheduleId
+			   AND sut.UserOid = @userOid
+			   AND sut.IsActive = 1
+			   AND sut.DeletedAt IS NULL
+			   AND sut.StartDate <= @date
+			   AND (sut.EndDate IS NULL OR sut.EndDate >= @date)
+			 ORDER BY sut.StartDate DESC;`
+		);
+	return String(result.recordset?.[0]?.ShiftName ?? 'Unassigned');
 }
 
 async function ensurePatternExists(
@@ -1764,7 +1829,8 @@ export const PATCH: RequestHandler = async ({ locals, cookies, request }) => {
 	return json({ success: true });
 };
 
-export const DELETE: RequestHandler = async ({ locals, cookies, request }) => {
+export const DELETE: RequestHandler = async (event) => {
+	const { locals, cookies, request } = event;
 	const currentUser = locals.user;
 	if (!currentUser) {
 		throw error(401, 'Unauthorized');
@@ -1891,7 +1957,48 @@ export const DELETE: RequestHandler = async ({ locals, cookies, request }) => {
 				   AND DeletedAt IS NULL
 				 ORDER BY StartDate ASC;`
 			);
-		const removalStartDate = toDateOnly(firstStart.recordset?.[0]?.StartDate) ?? new Date().toISOString().slice(0, 10);
+		const removalStartDate =
+			toDateOnly(firstStart.recordset?.[0]?.StartDate) ?? new Date().toISOString().slice(0, 10);
+		const serverDateResult = await req(tx).query(`SELECT CONVERT(date, SYSUTCDATETIME()) AS Today;`);
+		const today = toDateOnly(serverDateResult.recordset?.[0]?.Today) ?? '';
+		if (!today) {
+			throw error(500, 'Could not resolve current server date');
+		}
+		const currentShiftName = versionsBefore[versionsBefore.length - 1]?.name?.trim() || 'Unknown shift';
+		const impactedAssignmentsResult = await req(tx)
+			.input('scheduleId', scheduleId)
+			.input('employeeTypeId', employeeTypeId)
+			.input('today', today)
+			.query(
+				`WITH RankedImpacted AS (
+					SELECT
+						sut.UserOid,
+						CASE WHEN sut.StartDate <= @today THEN @today ELSE sut.StartDate END AS NotifyDate,
+						ROW_NUMBER() OVER (
+							PARTITION BY sut.UserOid
+							ORDER BY
+								CASE WHEN sut.StartDate <= @today THEN 0 ELSE 1 END ASC,
+								CASE WHEN sut.StartDate <= @today THEN sut.StartDate END DESC,
+								CASE WHEN sut.StartDate > @today THEN sut.StartDate END ASC
+						) AS RowNum
+					FROM dbo.ScheduleAssignments sut
+					WHERE sut.ScheduleId = @scheduleId
+					  AND sut.ShiftId = @employeeTypeId
+					  AND sut.IsActive = 1
+					  AND sut.DeletedAt IS NULL
+					  AND (sut.EndDate IS NULL OR sut.EndDate >= @today)
+				)
+				SELECT UserOid, NotifyDate
+				FROM RankedImpacted
+				WHERE RowNum = 1;`
+			);
+		const impactedNotifications = (impactedAssignmentsResult.recordset as Array<{
+			UserOid: string;
+			NotifyDate: Date | string;
+		}>).map((row) => ({
+			userOid: row.UserOid,
+			notifyDate: toDateOnly(row.NotifyDate) ?? today
+		})) satisfies ImpactedShiftAssignmentNotification[];
 
 		await req(tx)
 			.input('scheduleId', scheduleId)
@@ -1990,6 +2097,39 @@ export const DELETE: RequestHandler = async ({ locals, cookies, request }) => {
 		});
 
 		await tx.commit();
+
+		for (const impacted of impactedNotifications) {
+			const emailContext = await getShiftEmailContext({
+				pool,
+				scheduleId,
+				targetUserOid: impacted.userOid,
+				actorUserOid: actorOid
+			});
+			if (!emailContext) continue;
+			try {
+				const newShift = await getEffectiveShiftNameForDate(
+					new sql.Request(pool),
+					scheduleId,
+					impacted.userOid,
+					impacted.notifyDate
+				);
+				const delegatedAccessToken = await getSessionAccessToken(event);
+				await sendShiftChangeNotification({
+					scheduleName: emailContext.scheduleName,
+					themeJson: emailContext.scheduleThemeJson,
+					intendedRecipients: emailContext.targetEmail ? [emailContext.targetEmail] : [],
+					targetMemberName: emailContext.targetDisplayName,
+					date: impacted.notifyDate,
+					previousShift: currentShiftName,
+					newShift,
+					triggeringUserName: emailContext.actorDisplayName,
+					delegatedAccessToken
+				});
+			} catch (notificationError) {
+				console.error('Shift change notification failed:', notificationError);
+			}
+		}
+
 		return json({ success: true, removalMode: 'hard_deleted' });
 	} catch (err) {
 		try {

@@ -1,9 +1,10 @@
 import { error, json } from '@sveltejs/kit';
 import type { Cookies, RequestHandler } from '@sveltejs/kit';
 import { GetPool } from '$lib/server/db';
-import { getActiveScheduleId } from '$lib/server/auth';
+import { getActiveScheduleId, getSessionAccessToken } from '$lib/server/auth';
 import { sendUpcomingEventNotification } from '$lib/server/mail/notifications';
 import sql from 'mssql';
+import { requireScheduleRole } from '$lib/server/schedule-access';
 
 type ScheduleRole = 'Member' | 'Maintainer' | 'Manager';
 type EventScopeType = 'global' | 'shift' | 'user';
@@ -72,13 +73,6 @@ const allowedDisplayModes = new Set<EventDisplayMode>([
 	'Shift Override'
 ]);
 
-function roleRank(role: ScheduleRole | null): number {
-	if (role === 'Manager') return 3;
-	if (role === 'Maintainer') return 2;
-	if (role === 'Member') return 1;
-	return 0;
-}
-
 async function getActorContext(localsUserOid: string, cookies: Cookies, minRole: ScheduleRole) {
 	const scheduleId = await getActiveScheduleId(cookies);
 	if (!scheduleId) {
@@ -86,32 +80,13 @@ async function getActorContext(localsUserOid: string, cookies: Cookies, minRole:
 	}
 
 	const pool = await GetPool();
-	const accessResult = await pool
-		.request()
-		.input('scheduleId', scheduleId)
-		.input('userOid', localsUserOid)
-		.query(
-			`SELECT TOP (1) r.RoleName
-			 FROM dbo.ScheduleUsers su
-			 INNER JOIN dbo.Roles r
-			   ON r.RoleId = su.RoleId
-			 WHERE su.ScheduleId = @scheduleId
-			   AND su.UserOid = @userOid
-			   AND su.IsActive = 1
-			   AND su.DeletedAt IS NULL
-			 ORDER BY
-			   CASE r.RoleName
-				 WHEN 'Manager' THEN 3
-				 WHEN 'Maintainer' THEN 2
-				 WHEN 'Member' THEN 1
-				 ELSE 0
-			   END DESC;`
-		);
-
-	const role = (accessResult.recordset?.[0]?.RoleName as ScheduleRole | undefined) ?? null;
-	if (roleRank(role) < roleRank(minRole)) {
-		throw error(403, 'Insufficient permissions');
-	}
+	await requireScheduleRole({
+		userOid: localsUserOid,
+		scheduleId,
+		minRole,
+		pool,
+		errorMessage: 'Insufficient permissions'
+	});
 
 	return { pool, scheduleId, actorOid: localsUserOid };
 }
@@ -827,7 +802,8 @@ export const GET: RequestHandler = async ({ locals, cookies, url }) => {
 	return json({ events });
 };
 
-export const POST: RequestHandler = async ({ locals, cookies, request }) => {
+export const POST: RequestHandler = async (event) => {
+	const { locals, cookies, request } = event;
 	const currentUser = locals.user;
 	if (!currentUser) {
 		throw error(401, 'Unauthorized');
@@ -1003,6 +979,7 @@ export const POST: RequestHandler = async ({ locals, cookies, request }) => {
 		try {
 			const context = await getEventEmailContext(pool, scheduleId);
 			if (context) {
+				const delegatedAccessToken = await getSessionAccessToken(event);
 				const affectedUsers = await getAffectedEventMemberNames({
 					pool,
 					scheduleId,
@@ -1029,7 +1006,8 @@ export const POST: RequestHandler = async ({ locals, cookies, request }) => {
 					targetMemberName,
 					eventName: notificationEventName,
 					date: formatEventDateForEmail(startDate, endDate),
-					comments
+					comments,
+					delegatedAccessToken
 				});
 			}
 		} catch (notificationError) {
@@ -1040,7 +1018,8 @@ export const POST: RequestHandler = async ({ locals, cookies, request }) => {
 	return json({ eventId }, { status: 201 });
 };
 
-export const PATCH: RequestHandler = async ({ locals, cookies, request }) => {
+export const PATCH: RequestHandler = async (event) => {
+	const { locals, cookies, request } = event;
 	const currentUser = locals.user;
 	if (!currentUser) {
 		throw error(401, 'Unauthorized');
@@ -1317,6 +1296,7 @@ export const PATCH: RequestHandler = async ({ locals, cookies, request }) => {
 		try {
 			const context = await getEventEmailContext(pool, scheduleId);
 			if (context) {
+				const delegatedAccessToken = await getSessionAccessToken(event);
 				const affectedUsers = await getAffectedEventMemberNames({
 					pool,
 					scheduleId,
@@ -1343,7 +1323,8 @@ export const PATCH: RequestHandler = async ({ locals, cookies, request }) => {
 					targetMemberName,
 					eventName: notificationEventName,
 					date: formatEventDateForEmail(startDate, endDate),
-					comments
+					comments,
+					delegatedAccessToken
 				});
 			}
 		} catch (notificationError) {

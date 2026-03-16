@@ -2,6 +2,7 @@ import { error, json } from '@sveltejs/kit';
 import type { Cookies, RequestHandler } from '@sveltejs/kit';
 import { GetPool } from '$lib/server/db';
 import { getActiveScheduleId } from '$lib/server/auth';
+import { userCanAccessSchedule } from '$lib/server/schedule-access';
 import { resolveShiftOrderForMonth } from '$lib/server/shift-order';
 
 type ShiftSectionRow = {
@@ -365,20 +366,8 @@ async function getViewerContext(userOid: string, cookies: Cookies) {
 	}
 
 	const pool = await GetPool();
-	const accessResult = await pool
-		.request()
-		.input('scheduleId', scheduleId)
-		.input('userOid', userOid)
-		.query(
-			`SELECT TOP (1) 1 AS HasAccess
-			 FROM dbo.ScheduleUsers su
-			 WHERE su.ScheduleId = @scheduleId
-			   AND su.UserOid = @userOid
-			   AND su.IsActive = 1
-			   AND su.DeletedAt IS NULL;`
-		);
-
-	if (!accessResult.recordset?.[0]?.HasAccess) {
+	const hasAccess = await userCanAccessSchedule({ userOid, scheduleId, pool });
+	if (!hasAccess) {
 		throw error(403, 'You do not have access to this schedule');
 	}
 
