@@ -3,6 +3,7 @@ import type { RequestHandler } from './$types';
 import { GetPool } from '$lib/server/db';
 import { getActiveScheduleId } from '$lib/server/auth';
 import { requireScheduleRole } from '$lib/server/schedule-access';
+import { storedUserDisplayNameSql } from '$lib/server/user-name-sql';
 
 type ScheduleRole = 'Member' | 'Maintainer' | 'Manager';
 type EventScopeType = 'global' | 'shift' | 'user';
@@ -165,11 +166,7 @@ export const GET: RequestHandler = async ({ locals, cookies, url }) => {
 				sa.UserOid,
 				${assignmentShiftSelect} AS ShiftId,
 				et.Name AS ShiftName,
-				COALESCE(
-					NULLIF(u.DisplayName, ''),
-					NULLIF(u.Email, ''),
-					sa.UserOid
-				) AS UserName
+				${storedUserDisplayNameSql('u', 'sa.UserOid')} AS UserName
 			 FROM dbo.ScheduleAssignments sa
 			 INNER JOIN dbo.Shifts et
 			   ON et.ScheduleId = sa.ScheduleId
@@ -234,19 +231,13 @@ export const GET: RequestHandler = async ({ locals, cookies, url }) => {
 			oidParams.push(`@${param}`);
 		}
 		const usersResult = await nameRequest.query(
-			`SELECT
+			`SELECT DISTINCT
 				u.UserOid,
-				COALESCE(
-					NULLIF(u.DisplayName, ''),
-					NULLIF(u.Email, ''),
-					u.UserOid
-				) AS UserName
+				${storedUserDisplayNameSql('u')} AS UserName
 			 FROM dbo.Users u
 			 INNER JOIN dbo.ScheduleUsers su
 			   ON su.ScheduleId = @scheduleId
 			  AND su.UserOid = u.UserOid
-			  AND su.IsActive = 1
-			  AND su.DeletedAt IS NULL
 			 WHERE u.UserOid IN (${oidParams.join(', ')});`
 		);
 		for (const row of usersResult.recordset as Array<{ UserOid: string; UserName: string | null }>) {

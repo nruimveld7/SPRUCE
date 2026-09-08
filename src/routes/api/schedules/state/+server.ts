@@ -5,6 +5,7 @@ import { getSessionAccessToken } from '$lib/server/auth';
 import { sendAccessRemovedNotification } from '$lib/server/mail/notifications';
 import sql from 'mssql';
 import { isBootstrapManager, requireScheduleRole } from '$lib/server/schedule-access';
+import { storedUserDisplayNameSql } from '$lib/server/user-name-sql';
 
 type ScheduleDeactivationEmailTarget = {
 	targetUserOid: string;
@@ -70,7 +71,7 @@ async function getScheduleDeactivationEmailContext(params: {
 			`SELECT TOP (1)
 				s.Name AS ScheduleName,
 				s.ThemeJson AS ScheduleThemeJson,
-				COALESCE(NULLIF(au.DisplayName, ''), NULLIF(au.FullName, ''), @actorUserOid) AS ActorDisplayName
+				${storedUserDisplayNameSql('au', '@actorUserOid')} AS ActorDisplayName
 			 FROM dbo.Schedules s
 			 LEFT JOIN dbo.Users au
 			   ON au.UserOid = @actorUserOid
@@ -87,7 +88,7 @@ async function getScheduleDeactivationEmailContext(params: {
 		.query(
 			`SELECT
 				su.UserOid,
-				COALESCE(NULLIF(u.DisplayName, ''), NULLIF(u.FullName, ''), su.UserOid) AS TargetDisplayName,
+				${storedUserDisplayNameSql('u', 'su.UserOid')} AS TargetDisplayName,
 				NULLIF(LTRIM(RTRIM(u.Email)), '') AS TargetEmail
 			 FROM dbo.ScheduleUsers su
 			 LEFT JOIN dbo.Users u

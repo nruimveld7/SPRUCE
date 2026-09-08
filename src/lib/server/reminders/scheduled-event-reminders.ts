@@ -1,6 +1,7 @@
 import { GetPool } from '$lib/server/db';
 import { sendUpcomingEventNotification } from '$lib/server/mail/notifications';
 import sql from 'mssql';
+import { storedUserDisplayNameSql } from '$lib/server/user-name-sql';
 
 type ReminderUnit = 'days' | 'weeks' | 'months';
 type ReminderMeridiem = 'AM' | 'PM';
@@ -211,7 +212,7 @@ async function getAffectedEventMemberNames(params: {
 			.query(
 				`SELECT TOP (1)
 					su.UserOid AS MemberUserOid,
-					COALESCE(NULLIF(LTRIM(RTRIM(u.DisplayName)), ''), NULLIF(LTRIM(RTRIM(u.FullName)), ''), u.UserOid) AS MemberName,
+					${storedUserDisplayNameSql('u')} AS MemberName,
 					NULLIF(LTRIM(RTRIM(u.Email)), '') AS MemberEmail
 				 FROM dbo.ScheduleUsers su
 				 INNER JOIN dbo.Users u
@@ -239,7 +240,7 @@ async function getAffectedEventMemberNames(params: {
 			.query(
 				`SELECT DISTINCT
 					sa.UserOid AS MemberUserOid,
-					COALESCE(NULLIF(LTRIM(RTRIM(u.DisplayName)), ''), NULLIF(LTRIM(RTRIM(u.FullName)), ''), u.UserOid) AS MemberName,
+					${storedUserDisplayNameSql('u')} AS MemberName,
 					NULLIF(LTRIM(RTRIM(u.Email)), '') AS MemberEmail
 				 FROM dbo.ScheduleAssignments sa
 				 INNER JOIN dbo.ScheduleUsers su
@@ -280,7 +281,7 @@ async function getAffectedEventMemberNames(params: {
 		.query(
 			`SELECT DISTINCT
 				sa.UserOid AS MemberUserOid,
-				COALESCE(NULLIF(LTRIM(RTRIM(u.DisplayName)), ''), NULLIF(LTRIM(RTRIM(u.FullName)), ''), u.UserOid) AS MemberName,
+				${storedUserDisplayNameSql('u')} AS MemberName,
 				NULLIF(LTRIM(RTRIM(u.Email)), '') AS MemberEmail
 			 FROM dbo.ScheduleAssignments sa
 			 INNER JOIN dbo.ScheduleUsers su
@@ -347,7 +348,7 @@ async function getEventCodeReminderRecipients(params: {
 		.query(
 			`SELECT
 				su.UserOid AS MemberUserOid,
-				COALESCE(NULLIF(LTRIM(RTRIM(u.DisplayName)), ''), NULLIF(LTRIM(RTRIM(u.FullName)), ''), u.UserOid) AS MemberName,
+				${storedUserDisplayNameSql('u')} AS MemberName,
 				NULLIF(LTRIM(RTRIM(u.Email)), '') AS MemberEmail
 			 FROM OPENJSON(@recipientOidsJson)
 			      WITH (UserOid nvarchar(64) '$') r

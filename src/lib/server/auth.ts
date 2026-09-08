@@ -614,7 +614,12 @@ async function upsertUserProfile(user: Session['user']) {
 						  EntraFirstName = COALESCE(@entraFirstName, target.EntraFirstName),
 						  EntraLastName = COALESCE(@entraLastName, target.EntraLastName),
 						  DisplayName = CASE
-							 WHEN NULLIF(LTRIM(RTRIM(target.DisplayName)), '') IS NULL
+							 WHEN @displayName IS NOT NULL
+							  AND (
+								NULLIF(LTRIM(RTRIM(target.DisplayName)), '') IS NULL
+								OR NULLIF(LTRIM(RTRIM(target.DisplayName)), '') =
+								   NULLIF(LTRIM(RTRIM(target.FullName)), '')
+							  )
 							 THEN @displayName
 							 ELSE target.DisplayName
 						  END,
@@ -797,7 +802,6 @@ export async function readSession(event: RequestEvent): Promise<Session | null> 
 				name: row.Name ?? undefined
 			}
 		};
-		await upsertUserProfile(session.user);
 		await ensureBootstrapManager(session.user);
 		await cleanupSessions();
 		return session;

@@ -5,6 +5,7 @@ import { getActiveScheduleId, getSessionAccessToken } from '$lib/server/auth';
 import { sendUpcomingEventNotification } from '$lib/server/mail/notifications';
 import sql from 'mssql';
 import { requireScheduleRole } from '$lib/server/schedule-access';
+import { storedUserDisplayNameSql } from '$lib/server/user-name-sql';
 
 type ScheduleRole = 'Member' | 'Maintainer' | 'Manager';
 type EventScopeType = 'global' | 'shift' | 'user';
@@ -611,7 +612,7 @@ async function getAffectedEventMemberNames(params: {
 			.query(
 				`SELECT TOP (1)
 					su.UserOid AS MemberUserOid,
-					COALESCE(NULLIF(LTRIM(RTRIM(u.DisplayName)), ''), NULLIF(LTRIM(RTRIM(u.FullName)), ''), u.UserOid) AS MemberName,
+					${storedUserDisplayNameSql('u')} AS MemberName,
 					NULLIF(LTRIM(RTRIM(u.Email)), '') AS MemberEmail
 				 FROM dbo.ScheduleUsers su
 				 INNER JOIN dbo.Users u
@@ -638,7 +639,7 @@ async function getAffectedEventMemberNames(params: {
 			.query(
 				`SELECT DISTINCT
 					sut.UserOid AS MemberUserOid,
-					COALESCE(NULLIF(LTRIM(RTRIM(u.DisplayName)), ''), NULLIF(LTRIM(RTRIM(u.FullName)), ''), u.UserOid) AS MemberName,
+					${storedUserDisplayNameSql('u')} AS MemberName,
 					NULLIF(LTRIM(RTRIM(u.Email)), '') AS MemberEmail
 				 FROM dbo.ScheduleAssignments sut
 				 INNER JOIN dbo.ScheduleUsers su
@@ -679,7 +680,7 @@ async function getAffectedEventMemberNames(params: {
 		.query(
 			`SELECT DISTINCT
 			sut.UserOid AS MemberUserOid,
-			COALESCE(NULLIF(LTRIM(RTRIM(u.DisplayName)), ''), NULLIF(LTRIM(RTRIM(u.FullName)), ''), u.UserOid) AS MemberName,
+			${storedUserDisplayNameSql('u')} AS MemberName,
 			NULLIF(LTRIM(RTRIM(u.Email)), '') AS MemberEmail
 		 FROM dbo.ScheduleAssignments sut
 		 INNER JOIN dbo.ScheduleUsers su
@@ -725,7 +726,7 @@ async function getReminderRecipientsByOids(params: {
 		.query(
 			`SELECT
 				su.UserOid,
-				COALESCE(NULLIF(LTRIM(RTRIM(u.DisplayName)), ''), NULLIF(LTRIM(RTRIM(u.FullName)), ''), u.UserOid) AS MemberName,
+				${storedUserDisplayNameSql('u')} AS MemberName,
 				NULLIF(LTRIM(RTRIM(u.Email)), '') AS MemberEmail
 			 FROM OPENJSON(@recipientOidsJson)
 			      WITH (UserOid nvarchar(64) '$') recipients

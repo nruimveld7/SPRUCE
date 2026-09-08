@@ -5,6 +5,7 @@ import { getActiveScheduleId, getSessionAccessToken } from '$lib/server/auth';
 import sql from 'mssql';
 import { sendShiftChangeNotification } from '$lib/server/mail/notifications';
 import { requireScheduleRole } from '$lib/server/schedule-access';
+import { storedUserDisplayNameSql } from '$lib/server/user-name-sql';
 
 type ScheduleRole = 'Member' | 'Maintainer' | 'Manager';
 
@@ -194,9 +195,9 @@ async function getShiftEmailContext(params: {
 			`SELECT TOP (1)
 					s.Name AS ScheduleName,
 					s.ThemeJson AS ScheduleThemeJson,
-					COALESCE(NULLIF(tu.DisplayName, ''), NULLIF(tu.FullName, ''), @targetUserOid) AS TargetDisplayName,
+					${storedUserDisplayNameSql('tu', '@targetUserOid')} AS TargetDisplayName,
 					NULLIF(LTRIM(RTRIM(tu.Email)), '') AS TargetEmail,
-					COALESCE(NULLIF(au.DisplayName, ''), NULLIF(au.FullName, ''), @actorUserOid) AS ActorDisplayName
+					${storedUserDisplayNameSql('au', '@actorUserOid')} AS ActorDisplayName
 				 FROM dbo.Schedules s
 				 LEFT JOIN dbo.Users tu
 					ON tu.UserOid = @targetUserOid
@@ -932,13 +933,14 @@ export const GET: RequestHandler = async ({ locals, cookies, url }) => {
 						''
 					),
 					NULLIF(LTRIM(RTRIM(u.FullName)), ''),
+					NULLIF(LTRIM(RTRIM(u.DisplayName)), ''),
+					NULLIF(LTRIM(RTRIM(u.Email)), ''),
 					sut.UserOid
 				) AS UserName,
 				et.Name AS ShiftName
 			 FROM dbo.ScheduleAssignments sut
 			 LEFT JOIN dbo.Users u
 				ON u.UserOid = sut.UserOid
-			   AND u.DeletedAt IS NULL
 			 LEFT JOIN dbo.Shifts et
 				ON et.ScheduleId = sut.ScheduleId
 			   AND et.ShiftId = sut.ShiftId
@@ -1059,13 +1061,14 @@ export const GET: RequestHandler = async ({ locals, cookies, url }) => {
 					''
 				),
 				NULLIF(LTRIM(RTRIM(u.FullName)), ''),
+				NULLIF(LTRIM(RTRIM(u.DisplayName)), ''),
+				NULLIF(LTRIM(RTRIM(u.Email)), ''),
 				sut.UserOid
 			) AS UserName,
 			et.Name AS ShiftName
 		 FROM dbo.ScheduleAssignments sut
 		 LEFT JOIN dbo.Users u
 			ON u.UserOid = sut.UserOid
-		   AND u.DeletedAt IS NULL
 		 LEFT JOIN dbo.Shifts et
 			ON et.ScheduleId = sut.ScheduleId
 		   AND et.ShiftId = sut.ShiftId

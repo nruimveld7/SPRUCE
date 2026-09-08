@@ -5,7 +5,7 @@ import {
 	setActiveScheduleForSession,
 	tryGetSessionAccessTokenFromCookies
 } from '$lib/server/auth';
-import { triggerScheduleUserEmailSync } from '$lib/server/entra-user-sync';
+import { triggerScheduleUserProfileSync } from '$lib/server/entra-user-sync';
 import {
 	getRoleTier,
 	loadOnboardingSlidesByTierRange,
@@ -95,7 +95,7 @@ export const load: PageServerLoad = async ({ locals, cookies }) => {
 	if (scheduleId) {
 		const delegatedAccessToken = await tryGetSessionAccessTokenFromCookies(cookies);
 		if (delegatedAccessToken) {
-			triggerScheduleUserEmailSync({ scheduleId, accessToken: delegatedAccessToken });
+			triggerScheduleUserProfileSync({ scheduleId, accessToken: delegatedAccessToken });
 		}
 	}
 
