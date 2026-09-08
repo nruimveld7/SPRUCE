@@ -4,6 +4,7 @@ import { GetPool } from '$lib/server/db';
 import { getActiveScheduleId } from '$lib/server/auth';
 import { userCanAccessSchedule } from '$lib/server/schedule-access';
 import { resolveShiftOrderForMonth } from '$lib/server/shift-order';
+import { storedUserDisplayNameSql } from '$lib/server/user-name-sql';
 
 type ShiftSectionRow = {
 	ShiftId: number;
@@ -477,7 +478,7 @@ const shiftRows = (result.recordset as ShiftSectionRow[]).map((row) => ({
 			`SELECT
 				sut.ShiftId,
 				sut.UserOid,
-				COALESCE(NULLIF(u.DisplayName, ''), NULLIF(u.FullName, ''), sut.UserOid) AS UserName,
+				${storedUserDisplayNameSql('u', 'sut.UserOid')} AS UserName,
 				rolePick.RoleName,
 				sut.StartDate,
 				sut.EndDate

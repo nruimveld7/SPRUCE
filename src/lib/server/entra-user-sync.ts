@@ -82,11 +82,15 @@ export async function updateStoredUserFromEntra(
 	userOid: string,
 	lookup: EntraEmailLookupResult
 ): Promise<void> {
+	// A missing Entra account is expected after someone leaves the organization. Keep the
+	// application's last-known identity snapshot so historical schedules remain readable.
+	if (!lookup.found) return;
+
 	const pool = await GetPool();
-	const email = lookup.found ? lookup.email : null;
-	const fullName = lookup.found ? lookup.fullName : null;
-	const givenName = lookup.found ? lookup.givenName : null;
-	const surname = lookup.found ? lookup.surname : null;
+	const email = lookup.email;
+	const fullName = lookup.fullName;
+	const givenName = lookup.givenName;
+	const surname = lookup.surname;
 	await pool
 		.request()
 		.input('userOid', userOid)
@@ -96,7 +100,16 @@ export async function updateStoredUserFromEntra(
 		.input('entraLastName', surname)
 		.query(
 			`UPDATE dbo.Users
-			 SET Email = @email,
+			 SET DisplayName = CASE
+					WHEN @fullName IS NOT NULL
+					 AND (
+						NULLIF(LTRIM(RTRIM(DisplayName)), '') IS NULL
+						OR NULLIF(LTRIM(RTRIM(DisplayName)), '') = NULLIF(LTRIM(RTRIM(FullName)), '')
+					 )
+					THEN @fullName
+					ELSE DisplayName
+				 END,
+				 Email = @email,
 				 FullName = @fullName,
 				 EntraFirstName = @entraFirstName,
 				 EntraLastName = @entraLastName,
@@ -107,11 +120,30 @@ export async function updateStoredUserFromEntra(
 					OR ISNULL(NULLIF(LTRIM(RTRIM(FullName)), ''), '') <> ISNULL(NULLIF(LTRIM(RTRIM(@fullName)), ''), '')
 					OR ISNULL(NULLIF(LTRIM(RTRIM(EntraFirstName)), ''), '') <> ISNULL(NULLIF(LTRIM(RTRIM(@entraFirstName)), ''), '')
 					OR ISNULL(NULLIF(LTRIM(RTRIM(EntraLastName)), ''), '') <> ISNULL(NULLIF(LTRIM(RTRIM(@entraLastName)), ''), '')
+					OR (@fullName IS NOT NULL AND NULLIF(LTRIM(RTRIM(DisplayName)), '') IS NULL)
+			   );`
+		);
+
+	// Session identity fields are a cache too. Updating them prevents the next request from
+	// continuing to expose claims captured at an earlier login.
+	await pool
+		.request()
+		.input('userOid', userOid)
+		.input('email', email)
+		.input('fullName', fullName)
+		.query(
+			`UPDATE dbo.UserSessions
+			 SET Email = @email,
+				 Name = @fullName
+			 WHERE UserOid = @userOid
+			   AND (
+					ISNULL(NULLIF(LTRIM(RTRIM(Email)), ''), '') <> ISNULL(NULLIF(LTRIM(RTRIM(@email)), ''), '')
+					OR ISNULL(NULLIF(LTRIM(RTRIM(Name)), ''), '') <> ISNULL(NULLIF(LTRIM(RTRIM(@fullName)), ''), '')
 			   );`
 		);
 }
 
-export async function reconcileUserEmailByOid(
+export async function reconcileUserProfileByOid(
 	accessToken: string,
 	userOid: string
 ): Promise<EntraEmailLookupResult> {
@@ -119,6 +151,9 @@ export async function reconcileUserEmailByOid(
 	await updateStoredUserFromEntra(userOid, lookup);
 	return lookup;
 }
+
+// Kept for the mail transport bundle, which resolves the same full profile while obtaining email.
+export const reconcileUserEmailByOid = reconcileUserProfileByOid;
 
 async function runWithConcurrency<T>(
 	items: T[],
@@ -139,16 +174,19 @@ async function runWithConcurrency<T>(
 	await Promise.all(runners);
 }
 
-async function syncScheduleUserEmails(params: { scheduleId: number; accessToken: string }): Promise<void> {
+async function syncScheduleUserProfiles(params: {
+	scheduleId: number;
+	accessToken: string;
+}): Promise<void> {
 	const oids = await listScheduleUserOids(params.scheduleId);
 	if (!oids.length) return;
 
 	await runWithConcurrency(oids, MAX_GRAPH_CONCURRENCY, async (userOid) => {
-		await reconcileUserEmailByOid(params.accessToken, userOid);
+		await reconcileUserProfileByOid(params.accessToken, userOid);
 	});
 }
 
-export function triggerScheduleUserEmailSync(params: {
+export function triggerScheduleUserProfileSync(params: {
 	scheduleId: number;
 	accessToken: string;
 }): void {
@@ -158,10 +196,10 @@ export function triggerScheduleUserEmailSync(params: {
 	if (inFlightSyncBySchedule.has(params.scheduleId)) return;
 
 	nextAllowedSyncAtBySchedule.set(params.scheduleId, now + ENTRA_SYNC_INTERVAL_MS);
-	const syncPromise = syncScheduleUserEmails(params)
+	const syncPromise = syncScheduleUserProfiles(params)
 		.catch((syncError) => {
 			console.error(
-				`[entra-user-sync] scheduleId=${params.scheduleId} email sync failed:`,
+				`[entra-user-sync] scheduleId=${params.scheduleId} profile sync failed:`,
 				syncError
 			);
 		})

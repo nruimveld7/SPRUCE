@@ -3,6 +3,7 @@ import { env } from '$env/dynamic/private';
 import { GetPool } from '$lib/server/db';
 import type { RequestHandler } from './$types';
 import sql from 'mssql';
+import { storedUserDisplayNameSql } from '$lib/server/user-name-sql';
 
 const NOTIFICATIONS_MTLS_ALLOWED_SUBJECTS = 'NOTIFICATIONS_MTLS_ALLOWED_SUBJECTS';
 const NOTIFICATIONS_MTLS_ALLOWED_ISSUERS = 'NOTIFICATIONS_MTLS_ALLOWED_ISSUERS';
@@ -328,7 +329,7 @@ async function getAffectedEventMembers(params: {
 			.query(
 				`SELECT TOP (1)
 					su.UserOid AS MemberUserOid,
-					COALESCE(NULLIF(LTRIM(RTRIM(u.DisplayName)), ''), NULLIF(LTRIM(RTRIM(u.FullName)), ''), u.UserOid) AS MemberName,
+					${storedUserDisplayNameSql('u')} AS MemberName,
 					NULLIF(LTRIM(RTRIM(u.Email)), '') AS MemberEmail
 				 FROM dbo.ScheduleUsers su
 				 INNER JOIN dbo.Users u
@@ -356,7 +357,7 @@ async function getAffectedEventMembers(params: {
 			.query(
 				`SELECT DISTINCT
 					sa.UserOid AS MemberUserOid,
-					COALESCE(NULLIF(LTRIM(RTRIM(u.DisplayName)), ''), NULLIF(LTRIM(RTRIM(u.FullName)), ''), u.UserOid) AS MemberName,
+					${storedUserDisplayNameSql('u')} AS MemberName,
 					NULLIF(LTRIM(RTRIM(u.Email)), '') AS MemberEmail
 				 FROM dbo.ScheduleAssignments sa
 				 INNER JOIN dbo.ScheduleUsers su
@@ -397,7 +398,7 @@ async function getAffectedEventMembers(params: {
 		.query(
 			`SELECT DISTINCT
 				sa.UserOid AS MemberUserOid,
-				COALESCE(NULLIF(LTRIM(RTRIM(u.DisplayName)), ''), NULLIF(LTRIM(RTRIM(u.FullName)), ''), u.UserOid) AS MemberName,
+				${storedUserDisplayNameSql('u')} AS MemberName,
 				NULLIF(LTRIM(RTRIM(u.Email)), '') AS MemberEmail
 			 FROM dbo.ScheduleAssignments sa
 			 INNER JOIN dbo.ScheduleUsers su

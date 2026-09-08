@@ -13,6 +13,7 @@ import {
 	upsertShiftOrderSnapshot
 } from '$lib/server/shift-order';
 import { requireScheduleRole } from '$lib/server/schedule-access';
+import { storedUserDisplayNameSql } from '$lib/server/user-name-sql';
 
 type ScheduleRole = 'Member' | 'Maintainer' | 'Manager';
 
@@ -263,9 +264,9 @@ async function getShiftEmailContext(params: {
 			`SELECT TOP (1)
 				s.Name AS ScheduleName,
 				s.ThemeJson AS ScheduleThemeJson,
-				COALESCE(NULLIF(tu.DisplayName, ''), NULLIF(tu.FullName, ''), @targetUserOid) AS TargetDisplayName,
+				${storedUserDisplayNameSql('tu', '@targetUserOid')} AS TargetDisplayName,
 				NULLIF(LTRIM(RTRIM(tu.Email)), '') AS TargetEmail,
-				COALESCE(NULLIF(au.DisplayName, ''), NULLIF(au.FullName, ''), @actorUserOid) AS ActorDisplayName
+				${storedUserDisplayNameSql('au', '@actorUserOid')} AS ActorDisplayName
 			 FROM dbo.Schedules s
 			 LEFT JOIN dbo.Users tu
 				ON tu.UserOid = @targetUserOid
